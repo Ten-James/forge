@@ -3,10 +3,16 @@ package forge.screens.match.arena;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.utils.Align;
+import com.badlogic.gdx.utils.ObjectFloatMap;
+import com.badlogic.gdx.utils.ObjectMap;
 
 import forge.Graphics;
+import forge.assets.FImageComplex;
 import forge.assets.FSkinFont;
 import forge.assets.TextRenderer;
+import forge.card.CardImageRenderer;
+import forge.card.CardRenderer;
+import forge.game.card.CardView;
 import forge.util.TextBounds;
 
 /**
@@ -322,6 +328,45 @@ public final class ArenaArt {
     }
 
     // ---- portraits --------------------------------------------------------------------------------------------------
+    private static final TextureRegion SQUARE = new TextureRegion();
+
+    /**
+     * A card's art as a square for a circle crop, in a region of its own (keep it: {@link #squareOf} shares one), or null
+     * while it has no picture (the "no picture" stand-in counts as none). Look it up when the card changes, not per frame.
+     */
+    public static TextureRegion circleArtOf(final CardView card) {
+        final FImageComplex picture;
+        try {
+            picture = CardRenderer.getCardArt(card);
+        } catch (final RuntimeException e) {
+            return null;
+        }
+        if (picture == null || picture == CardImageRenderer.forgeArt) {
+            return null;
+        }
+        final TextureRegion r = picture.getTextureRegion();
+        if (r == null || r.getRegionWidth() <= 0 || r.getRegionHeight() <= 0) {
+            return null;
+        }
+        return new TextureRegion(squareOf(r));
+    }
+
+    /**
+     * The middle square of a picture, so a circle crop of it is round (portraits, a commander's art in a chip). Shared
+     * scratch region: use it before asking for another.
+     */
+    public static TextureRegion squareOf(final TextureRegion r) {
+        final int w = r.getRegionWidth(), h = r.getRegionHeight();
+        if (w == h) {
+            return r;
+        }
+        final int s = Math.min(w, h);
+        SQUARE.setTexture(r.getTexture());
+        SQUARE.setRegion(r.getRegionX() + (w - s) / 2, r.getRegionY() + (h - s) / 2, s, s);
+        SQUARE.flip(r.isFlipX(), r.isFlipY());
+        return SQUARE;
+    }
+
     /** An image cropped to a circle (antialiased), e.g. an avatar. One draw call (tilt shader). */
     public static void circleImage(final Graphics g, final TextureRegion image, final float cx, final float cy, final float diameter) {
         g.drawTiltedImage(image, cx - diameter / 2f, cy - diameter / 2f, diameter, diameter, 0f, 0f, 0f, 1f, diameter / 2f, 0f, 0f, 1f);
@@ -392,6 +437,12 @@ public final class ArenaArt {
         RULES.drawText(g, text, font, color, x, y, w, h, y, h, true, Align.left, false);
     }
 
+    /** One centred line with mana symbols drawn as icons ("Pay {2} each"). */
+    public static void symbolText(final Graphics g, final String text, final FSkinFont font, final Color color, final float x, final float y,
+            final float w, final float h) {
+        RULES.drawText(g, text, font, color, x, y, w, h, y, h, false, Align.center, true);
+    }
+
     /** Height rules text takes when wrapped to {@code w}. */
     public static float rulesTextHeight(final String text, final FSkinFont font, final float w) {
         return RULES.getWrappedBounds(text, font, w).height;
@@ -404,5 +455,94 @@ public final class ArenaArt {
         }
         font.getBounds(text, 0, text.length(), BOUNDS);
         return BOUNDS.width;
+    }
+
+    private static final ObjectMap<FSkinFont, ObjectFloatMap<String>> WIDTHS = new ObjectMap<>();
+    private static final int WIDTHS_PER_FONT = 512;
+
+    /**
+     * {@link #textWidth} for text drawn every frame (names, figures, labels): measured once per font and string, then
+     * looked up. Pass strings that are kept (shared figures, names, labels), not ones built per frame. Render thread.
+     */
+    public static float cachedTextWidth(final String text, final FSkinFont font) {
+        if (text == null || text.isEmpty()) {
+            return 0f;
+        }
+        ObjectFloatMap<String> widths = WIDTHS.get(font);
+        if (widths == null) {
+            widths = new ObjectFloatMap<>();
+            WIDTHS.put(font, widths);
+        }
+        float w = widths.get(text, -1f);
+        if (w < 0f) {
+            if (widths.size >= WIDTHS_PER_FONT) {
+                widths.clear(); // a long game's worth of names and figures: start again rather than grow
+            }
+            w = textWidth(text, font);
+            widths.put(text, w);
+        }
+        return w;
+    }
+
+    /** The ground of hint plates (and of the attack plates and chips that say what a click does: one style). */
+    public static final Color HINT_FILL = ArenaTheme.rgba(6, 8, 13, 235);
+
+    /** Whether a texture region can still be drawn (its texture not disposed by the image cache since it was looked up). */
+    public static boolean isLive(final TextureRegion r) {
+        return r != null && r.getTexture() != null && r.getTexture().getTextureObjectHandle() != 0;
+    }
+
+    private static final ObjectMap<FSkinFont, ObjectFloatMap<String>> SYMBOL_WIDTHS = new ObjectMap<>();
+
+    /** The width of one line with mana symbols drawn as icons ({@link #symbolText}), measured once per font and text. */
+    public static float symbolTextWidth(final String text, final FSkinFont font) {
+        if (text == null || text.isEmpty()) {
+            return 0f;
+        }
+        ObjectFloatMap<String> widths = SYMBOL_WIDTHS.get(font);
+        if (widths == null) {
+            widths = new ObjectFloatMap<>();
+            SYMBOL_WIDTHS.put(font, widths);
+        }
+        float w = widths.get(text, -1f);
+        if (w < 0f) {
+            if (widths.size >= WIDTHS_PER_FONT) {
+                widths.clear();
+            }
+            w = RULES.getBounds(text, font).width;
+            widths.put(text, w);
+        }
+        return w;
+    }
+
+    /** How tall {@link #hint} draws with this font. */
+    public static float hintHeight(final FSkinFont font) {
+        return Math.round(font.getLineHeight() * 1.5f);
+    }
+
+    /**
+     * A one-line hint plate (what something lit up means and that it can be clicked) centred on {@code cx}, its top at
+     * {@code top}, kept inside {@code minX..maxX} (the window, in the caller's coordinates). {@code text} should be a
+     * kept string (its width is cached).
+     */
+    public static void hint(final Graphics g, final String text, final FSkinFont font, final float cx, final float top, final float minX,
+            final float maxX) {
+        hint(g, text, font, cx, top, minX, maxX, ArenaTheme.GOLD, ArenaTheme.WHITE);
+    }
+
+    /** {@link #hint} with its rim and text in these colours (an attack choice's state, a greyed-out choice). */
+    public static void hint(final Graphics g, final String text, final FSkinFont font, final float cx, final float top, final float minX,
+            final float maxX, final Color rim, final Color ink) {
+        final float h = hintHeight(font);
+        final float w = cachedTextWidth(text, font) + h;
+        final float x = Math.max(minX, Math.min(maxX - w, cx - w / 2f));
+        g.drawSoftShadow(ArenaTheme.alpha(ArenaTheme.BLACK, 0.6f, S1), x, top + ArenaTheme.px(2), w, h, h / 2f, ArenaTheme.px(6));
+        g.fillSmoothRoundRect(HINT_FILL, x, top, w, h, h / 2f);
+        g.drawSmoothRoundRect(Math.max(1f, ArenaTheme.px(1.5f)), rim, x, top, w, h, h / 2f);
+        if (text.indexOf('{') >= 0) { // a cost in it ("{2}"): mana symbols, as on the cards
+            RULES.drawText(g, text, font, ink, x, top, w, h, top, h, false, Align.center, true);
+        } else {
+            g.drawText(text, font, ink, x, top, w, h, false, Align.center, true);
+        }
     }
 }

@@ -349,6 +349,8 @@ public class VPlayerPanel extends FContainer {
         bringTabsToFront();
         //the Arena board's own parts: piles, name plate, an opponent's hand as card backs (hidden in the default look)
         arenaPiles = add(new ArenaPlayerParts.Piles(player, false, this::openArenaZone));
+        arenaCastables = add(new ArenaPlayerParts.Castables(player));
+        arenaCastables.setVisible(false);
         arenaName = add(new ArenaPlayerParts.NamePlate(player));
         arenaHand = add(new ArenaPlayerParts.OpponentHand(player));
         arenaPiles.setVisible(false);
@@ -360,7 +362,19 @@ public class VPlayerPanel extends FContainer {
     }
 
     // ---- the Arena board ------------------------------------------------------------------------------------------
+    private boolean arenaSeatLadder;
+
+    /** Whether the mouse is over one of this panel's parts (laid out in its coordinates; drawn or not). */
+    private boolean isPointerOver(FDisplayObject part) {
+        if (!Forge.magnify) {
+            return false;
+        }
+        final float mx = Forge.mouseMovedX - screenPos.x, my = Forge.mouseMovedY - screenPos.y;
+        final float pad = Utils.scale(4);
+        return mx >= part.getLeft() - pad && mx < part.getRight() + pad && my >= part.getTop() - pad && my < part.getBottom() + pad;
+    }
     private ArenaPlayerParts.Piles arenaPiles;
+    private ArenaPlayerParts.Castables arenaCastables;
     private ArenaPlayerParts.NamePlate arenaName;
     private ArenaPlayerParts.OpponentHand arenaHand;
     private boolean arenaLaidOut;
@@ -411,13 +425,17 @@ public class VPlayerPanel extends FContainer {
         final float cx = Math.round(width / 2f), cy = ArenaBoard.portraitCenterY(local, seat) - top;
         avatar.setArenaOpponent(!local);
         avatar.setBounds(cx - d / 2f, cy - d / 2f, d, d);
+        arenaSeatLadder = seat;
         phaseIndicator.setVisible(!seat);
+        final float ladderH = Math.round(ArenaBoard.windowH() * 0.024f);
+        final float span = Math.round(d * 1.7f);
+        phaseIndicator.setArenaLadder(d);
         if (!seat) {
-            final float ladderH = Math.round(ArenaBoard.windowH() * 0.024f);
-            final float span = Math.round(d * 1.7f);
-            phaseIndicator.setArenaLadder(d);
             phaseIndicator.setBounds(cx - span, cy - ladderH / 2f + Math.round(d * (local ? 0.04f : -0.04f)), 2 * span, ladderH);
+        } else { //a seat's ladder (your stops in their turns) comes out under its portrait while the pointer is there
+            phaseIndicator.setBounds(cx - span, cy + d / 2f + Math.round(d * 0.42f), 2 * span, ladderH);
         }
+        phaseIndicator.setArenaPopup(seat, seat ? Forge.getLocalizer().getMessage("lblArenaSeatStops", player.getName()) : null);
 
         //piles, name plate, an opponent's hand
         ArenaBoard.piles(local, seat, left, width, arenaRect);
@@ -426,18 +444,34 @@ public class VPlayerPanel extends FContainer {
         arenaPiles.setVisible(true);
         ArenaBoard.name(local, seat, left, width, arenaRect);
         arenaName.setBounds(arenaRect.x - left, arenaRect.y - top, arenaRect.width, arenaRect.height);
+        arenaName.setSeatRows(seat ? ArenaBoard.nameHeight() : 0);
         arenaName.setVisible(true);
-        arenaHand.setVisible(!local);
+        //your hand is the fan along the bottom; anyone else's is a small fan by their portrait - also a player who takes
+        //the bottom seat once you are out and only watch (their cards are not yours to see)
+        final boolean ownFan = local && MatchController.getView() != null && MatchController.getView().getBottomPlayerPanel() == this;
+        arenaHand.setVisible(!ownFan);
+        arenaHand.setAlwaysCount(seat || (local && !ownFan)); //a seat's small fan, or a watched bottom player's; 1v1 as before
         if (!local) {
             ArenaBoard.opponentHand(seat, left, width, arenaRect);
             arenaHand.setBounds(arenaRect.x - left, arenaRect.y - top, arenaRect.width, arenaRect.height);
+        } else if (!ownFan) {
+            ArenaBoard.watchedHand(cx + left, arenaRect);
+            arenaHand.setBounds(arenaRect.x - left, arenaRect.y - top, arenaRect.width, arenaRect.height);
+        }
+        //what you can cast from outside your hand (your commander...), as plates over your piles
+        arenaCastables.setVisible(ownFan);
+        if (ownFan) {
+            ArenaBoard.piles(true, false, left, width, arenaRect);
+            final float ch = ArenaPlayerParts.Castables.heightFor(ArenaBoard.windowH());
+            arenaCastables.setBounds(arenaRect.x - left, arenaRect.y - top - ch - Math.round(ArenaBoard.windowH() * 0.008f),
+                    Math.round(ArenaBoard.windowW() * 0.22f), ch);
         }
 
-        //what floats beside the portrait: mana in the pool
+        //what floats beside the portrait: mana in the pool (a seat's shows as chips on its name plate, where it has room)
         final VDisplayArea pool = tabManaPool.getDisplayArea();
         final float poolH = Math.round(ArenaBoard.windowH() * 0.05f);
         pool.setBounds(ArenaBoard.extrasLeft(seat, cx), cy - poolH / 2f, poolH * 6, poolH);
-        pool.setVisible(pool.getCount() > 0);
+        pool.setVisible(!seat && pool.getCount() > 0);
 
         //the zones: your hand is the fan; a zone the game opened is a strip over the board; the rest stay closed
         for (InfoTab tab : tabs) {
@@ -449,30 +483,47 @@ public class VPlayerPanel extends FContainer {
                 continue;
             }
             final boolean hand = tab instanceof InfoTabZone z && z.zoneType == ZoneType.Hand;
-            if (hand && local) {
+            if (hand && ownFan) {
                 ArenaBoard.hand(arenaRect);
                 area.setBounds(arenaRect.x - left, arenaRect.y - top, arenaRect.width, arenaRect.height);
                 area.setVisible(true);
-            } else if (tab == selectedTab) { //includes an opponent's hand you may see (e.g. while controlling their turn)
-                final float sw = Math.round(ArenaBoard.windowW() * 0.46f), sh = Math.round(ArenaBoard.windowH() * 0.16f);
-                final float sy = local ? Math.round(ArenaBoard.windowH() * 0.4f) - top : Math.round(ArenaBoard.windowH() * 0.13f) - top;
-                area.setBounds(local ? Math.round(ArenaBoard.windowW() * 0.02f) : width - sw - Math.round(ArenaBoard.windowW() * 0.02f), sy, sw, sh);
+            } else if (tab == selectedTab && !(hand && (seat || !ownFan) && player.getMindSlaveMaster() == null)) {
+                //includes an opponent's hand you may see (e.g. while controlling their turn). A seat's hand you only
+                //watch (a spectator, a hand revealed for good) stays its fan, face up: three strips would bury the seats
+                placeArenaStrip(area, local, seat, width, top, 0.46f);
                 area.setVisible(true);
             } else {
                 area.setVisible(false);
             }
         }
         if (commandTab == selectedTab) {
-            final float sw = Math.round(ArenaBoard.windowW() * 0.3f), sh = Math.round(ArenaBoard.windowH() * 0.16f);
-            commandZone.setBounds(local ? Math.round(ArenaBoard.windowW() * 0.02f) : width - sw - Math.round(ArenaBoard.windowW() * 0.02f),
-                    (local ? Math.round(ArenaBoard.windowH() * 0.4f) : Math.round(ArenaBoard.windowH() * 0.13f)) - top, sw, sh);
+            placeArenaStrip(commandZone, local, seat, width, top, 0.3f);
             commandZone.setVisible(true);
         }
+    }
+
+    /**
+     * A zone opened over the board as a strip of cards on glass: over the middle of the window for you, in the top right
+     * for a single opponent, and inside the seat (centred, no wider than it) for one of three or four.
+     */
+    private void placeArenaStrip(final FDisplayObject area, final boolean local, final boolean seat, final float width, final float top,
+            final float share) {
+        final float margin = Math.round(ArenaBoard.windowW() * 0.02f);
+        float sw = Math.round(ArenaBoard.windowW() * share);
+        if (seat) {
+            sw = Math.min(sw, width - 2 * Math.round(ArenaBoard.windowW() * 0.01f));
+        }
+        final float sh = Math.round(ArenaBoard.windowH() * 0.16f);
+        final float sy = local ? Math.round(ArenaBoard.windowH() * 0.4f) - top : Math.round(ArenaBoard.windowH() * 0.13f) - top;
+        final float sx = local ? margin : seat ? Math.round((width - sw) / 2f) : width - sw - margin;
+        area.setBounds(sx, sy, sw, sh);
     }
 
     /** Back to the default look: what the Arena layout hid comes back, its own parts go. */
     private void leaveArenaLayout() {
         arenaLaidOut = false;
+        arenaSeatLadder = false;
+        phaseIndicator.setArenaPopup(false, null);
         for (InfoTab tab : tabs) {
             tab.setVisible(true);
             tab.setDisplayVisible(tab == selectedTab);
@@ -481,6 +532,7 @@ public class VPlayerPanel extends FContainer {
         phaseIndicator.setVisible(true);
         phaseIndicator.setArenaLadder(0);
         arenaPiles.setVisible(false);
+        arenaCastables.setVisible(false);
         arenaName.setVisible(false);
         arenaHand.setVisible(false);
         field.setArenaRows(-1, 0, 0, 0);
@@ -1630,6 +1682,9 @@ public class VPlayerPanel extends FContainer {
     @Override
     public void draw(Graphics g) {
         if (arenaLaidOut && ArenaMatchLayout.applies()) {
+            if (arenaSeatLadder) { //the seat's phase stops show while the pointer is on its portrait or on the ladder itself
+                phaseIndicator.setVisible(isPointerOver(avatar) || (phaseIndicator.isVisible() && isPointerOver(phaseIndicator)));
+            }
             super.draw(g);
             return;
         }

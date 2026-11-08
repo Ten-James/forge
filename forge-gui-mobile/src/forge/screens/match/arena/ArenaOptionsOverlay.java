@@ -426,10 +426,13 @@ public final class ArenaOptionsOverlay extends ArenaDialogOverlay {
             btnSubmit.text = Forge.getLocalizer().getMessage("lblArenaSubmitPlain");
             btnSubmit.enabled = true;
         } else {
-            btnSubmit.text = Forge.getLocalizer().getMessage("lblArenaSubmit", picked.size());
             // declining a single pick has its own button; a list of picks may be left empty
             final int least = max == 1 ? 1 : min;
             btnSubmit.enabled = picked.size() >= least && picked.size() <= max;
+            // the button says what it does: what is still to pick, or "Choose" a single pick, "Submit 2" several
+            btnSubmit.text = picked.size() < least ? Forge.getLocalizer().getMessage("lblArenaPickMore", least - picked.size())
+                    : max == 1 ? Forge.getLocalizer().getMessage("lblArenaChooseThis")
+                    : Forge.getLocalizer().getMessage("lblArenaSubmit", picked.size());
         }
         if (getWidth() > 0) {
             ArenaDialogKit.placeButtons(getWidth(), getHeight(), btnSubmit, btnOther, btnCancel);
@@ -1217,6 +1220,12 @@ public final class ArenaOptionsOverlay extends ArenaDialogOverlay {
         final FSkinFont f = numeralFont(h);
         final String n = numbers.get(numberIndex).label;
         final float lh = f.getLineHeight();
+        // the number, its arrows and its range sit on a panel of their own, so the board under the dialog never shows through
+        final float padX = Math.round(h * 0.03f);
+        final float px = stepLower.x - padX, pr = stepHigher.x + stepHigher.width + padX;
+        final float pt = Math.min(stepLower.y, cy - lh / 2f) - padX;
+        final float pb = cy + f.getCapHeight() / 2f + Math.round(h * 0.03f) + ArenaDialogKit.font(h * 0.024f).getLineHeight() + padX;
+        ArenaArt.glassPanel(g, px, pt, pr - px, pb - pt, Math.round(h * 0.02f));
         g.drawText(n, f, ArenaTheme.alpha(ArenaTheme.BLACK, (170 / 255f) * alpha, S1), cx - w / 2f, cy - lh / 2f + 2, w, lh, false, Align.center, true);
         ArenaArt.textOutlined(g, n, f, ArenaTheme.alpha(ArenaTheme.WHITE, alpha, S2), cx - w / 2f, cy - lh / 2f, w, lh, Align.center);
         final FSkinFont rf = ArenaDialogKit.font(h * 0.024f);

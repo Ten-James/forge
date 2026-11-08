@@ -26,6 +26,7 @@ import forge.game.card.CardView;
 import forge.game.combat.AttackingBand;
 import forge.game.combat.Combat;
 import forge.game.combat.CombatUtil;
+import forge.game.cost.Cost;
 import forge.game.event.GameEventCombatUpdate;
 import forge.game.keyword.Keyword;
 import forge.game.player.Player;
@@ -308,7 +309,62 @@ public class InputAttack extends InputSyncronizedBase {
         if (activeBand != null) {
             for (final Card card : activeBand.getAttackers()) chosen.add(CardView.get(card));
         }
-        return Selection.ofChosen(chosen);
+        return Selection.ofChosen(chosen).withDefenders(defenderOptions());
+    }
+
+    /**
+     * What each possible defender allows: open if one of your creatures that can attack can attack it (without a cost
+     * for at least one of them), costing if every one that can must pay (Propaganda, Ghostly Prison...), closed if none
+     * can; and how many of your creatures it has goaded. Only a look that shows the choice of defender uses this.
+     */
+    private List<Selection.DefenderOption> defenderOptions() {
+        if (!getController().getGui().isLibgdxPort()) {
+            return List.of(); // only the libGDX Arena board shows them: the Swing client keeps its prompt as it was
+        }
+        if (defenderOptions == null) { // once per declaration: who can be attacked, at what cost, does not change while you pick
+            defenderOptions = readDefenderOptions();
+        }
+        return defenderOptions;
+    }
+
+    private List<Selection.DefenderOption> defenderOptions;
+
+    /**
+     * Each defender: open if one of your creatures that can attack it can do so without a cost, costing if every one of
+     * them must pay (their costs, or "{1} / {2}" when they differ), closed if none can; and how many of your creatures
+     * that can attack were goaded by that player (they must attack another player if they can).
+     */
+    private List<Selection.DefenderOption> readDefenderOptions() {
+        final CardCollectionView mine = playerAttacks.getCardsIn(ZoneType.Battlefield);
+        final List<Selection.DefenderOption> options = new ArrayList<>();
+        for (final GameEntity defender : defenders) {
+            boolean open = false, any = false;
+            final Set<String> costs = new java.util.LinkedHashSet<>();
+            int goaded = 0;
+            for (final Card c : mine) {
+                if (!c.isCreature() || !CombatUtil.canAttack(c)) {
+                    continue;
+                }
+                if (defender instanceof Player p && c.isGoadedBy(p)) {
+                    goaded++;
+                }
+                if (open || !CombatUtil.canAttack(c, defender)) {
+                    continue;
+                }
+                any = true;
+                final Cost attackCost = CombatUtil.getAttackCost(c.getGame(), c, defender);
+                if (attackCost == null) {
+                    open = true;
+                } else {
+                    costs.add(attackCost.toSimpleString());
+                }
+            }
+            final Selection.DefenderState state = open ? Selection.DefenderState.OPEN
+                    : any ? Selection.DefenderState.COSTS : Selection.DefenderState.CLOSED;
+            options.add(new Selection.DefenderOption(GameEntityView.get(defender), state,
+                    open || costs.isEmpty() ? null : String.join(" / ", costs), goaded));
+        }
+        return options;
     }
 
     @Override

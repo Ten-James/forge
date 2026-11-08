@@ -6,15 +6,17 @@ import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.utils.Align;
 
+import forge.Forge;
 import forge.Graphics;
 import forge.assets.FImage;
 import forge.assets.FImageComplex;
 import forge.assets.FSkinFont;
 import forge.game.GameView;
-import forge.game.card.CounterEnumType;
 import forge.game.player.PlayerView;
 import forge.game.spellability.StackItemView;
+import forge.gamemodes.match.Selection;
 import forge.screens.match.MatchController;
+import forge.screens.match.views.VAvatar;
 import forge.util.AITimeoutTracker;
 
 /**
@@ -25,7 +27,7 @@ import forge.util.AITimeoutTracker;
  * a new figure while the difference floats off. Everything is drawn round the portrait's own square (the view's bounds);
  * the plinth and the sunburst reach well beyond it.
  */
-public final class ArenaPortrait implements ArenaSkin<forge.screens.match.views.VAvatar> {
+public final class ArenaPortrait implements ArenaSkin<VAvatar> {
     /** What a portrait remembers between frames. */
     public static final class State {
         final ArenaMotion.Fade turnLight = new ArenaMotion.Fade(0f);
@@ -38,12 +40,10 @@ public final class ArenaPortrait implements ArenaSkin<forge.screens.match.views.
         String floatText;
         String lifeText = "";
         int lifeTextFor = Integer.MIN_VALUE;
-        String poisonText;
-        int poisonFor = -1;
-        // commander damage taken, one chip per opposing commander that has dealt some (21 is lethal)
-        final String[] cmdrText = new String[4];
-        final int[] cmdrFor = {-1, -1, -1, -1};
-        final boolean[] cmdrNear = new boolean[4];
+        String hintText, waitingText, lethalText;
+        int lethalFor = -1;
+        // the chips round the life plate: commander damage on the left, counters and designations on the right
+        final ArenaPlayerInfo.Row damageRow = new ArenaPlayerInfo.Row(), infoRow = new ArenaPlayerInfo.Row();
     }
 
     private static final int RING_CHOSEN = 0, RING_SELECTABLE = 1, RING_TARGET = 2, RING_HOVER = 3;
@@ -53,14 +53,14 @@ public final class ArenaPortrait implements ArenaSkin<forge.screens.match.views.
     private static final Color STEEL_TOP = ArenaTheme.rgb(0x4A4D50), STEEL_BOTTOM = ArenaTheme.rgb(0x212327), STEEL_ACTIVE_TOP = ArenaTheme.rgb(0x786C56),
             STEEL_ACTIVE_BOTTOM = ArenaTheme.rgb(0x2E2A24), BRASS = ArenaTheme.rgb(0xB89A5E), BRASS_IDLE = ArenaTheme.rgb(0x6E6C66);
     private static final Color PLATE_TOP = ArenaTheme.rgb(0x1B1E24), PLATE_BOTTOM = ArenaTheme.rgb(0x0B0C10), PLATE_RIM_TOP = ArenaTheme.rgb(0xC9B07A),
-            PLATE_RIM_BOTTOM = ArenaTheme.rgb(0x5E4E30), POISON = ArenaTheme.rgb(0x6FD06F);
+            PLATE_RIM_BOTTOM = ArenaTheme.rgb(0x5E4E30);
+
     private static final Color BUBBLE = ArenaTheme.rgba(10, 12, 18, 225);
     private static final Color S1 = new Color(), S2 = new Color(), S3 = new Color(), S4 = new Color();
-    private static final TextureRegion SQUARE = new TextureRegion();
     private static Texture sunburst;
 
     @Override
-    public boolean draw(final Graphics g, final forge.screens.match.views.VAvatar v) {
+    public boolean draw(final Graphics g, final VAvatar v) {
         final PlayerView player = v.getPlayer();
         final State st = v.getArenaState();
         final float d = Math.min(v.getWidth(), v.getHeight());
@@ -112,8 +112,48 @@ public final class ArenaPortrait implements ArenaSkin<forge.screens.match.views.
         final boolean seat = d < ArenaBoard.windowH() * 0.09f;
         final float plateH = Math.max(ArenaTheme.px(22), Math.round(d * (seat ? 0.58f : 0.42f)));
         drawLifePlate(g, st, cx, cy + d / 2f, plateH);
-        drawPoison(g, st, player, cx + plateH * 0.75f + ArenaTheme.px(4), cy + d / 2f, plateH);
-        drawCommanderDamage(g, st, player, cx - plateH * 0.75f - ArenaTheme.px(4), cy + d / 2f, plateH);
+        if (!seat) { //a seat's chips go under its name plate: beside its small plate they would run into its hand and piles
+            final float chipH = Math.round(plateH * CHIP_SHARE), gap = plateH * 0.75f + ArenaTheme.px(6);
+            // with seats round the table, it says when you play next as it does on theirs
+            final int lead = ArenaBoard.isSeatGame() && ArenaBoard.nextTurnPlayer() == player ? ArenaPlayerInfo.LEAD_NEXT : ArenaPlayerInfo.LEAD_NONE;
+            ArenaPlayerInfo.draw(g, st.damageRow, v, player, ArenaPlayerInfo.CMDR, ArenaPlayerInfo.LEAD_NONE, null, cx - gap, cy + d / 2f, chipH, true, 0);
+            ArenaPlayerInfo.draw(g, st.infoRow, v, player, ArenaPlayerInfo.COUNTERS | ArenaPlayerInfo.STATUS, lead, null, cx + gap, cy + d / 2f, chipH,
+                    false, 0);
+        }
+        final FSkinFont hf = ArenaCards.evenFont(Math.max(ArenaTheme.px(18), plateH * HINT_SHARE));
+        final float hintTop = opponent ? cy + d / 2f + plateH * 0.6f + ArenaTheme.px(4) : cy - d / 2f - ArenaArt.hintHeight(hf) - ArenaTheme.px(8);
+        // a single opponent's portrait has room under it for the attack plate; a seat says it on its name plate
+        final Selection.DefenderOption attack = opponent && !seat ? ArenaBoard.attackOption(player) : null;
+        if (attack != null) {
+            // while you declare attackers every opponent says, without hovering, where your attack goes and that it can go
+            // to them instead (the prompt asks for the same in words)
+            final boolean current = ring == RING_CHOSEN;
+            ArenaArt.hint(g, ArenaBoard.attackPlateText(attack, current), hf, cx, hintTop, -v.screenPos.x, ArenaBoard.windowW() - v.screenPos.x,
+                    ArenaBoard.attackPlateRim(attack, current), ArenaBoard.attackPlateInk(attack));
+        } else if (ring == RING_SELECTABLE && isPointerOver(v) && ArenaBoard.attackOption(player) == null) { // what the breathing ring means: it can be clicked, for what
+            ArenaArt.hint(g, hintText(st, player), hf, cx, hintTop, -v.screenPos.x, ArenaBoard.windowW() - v.screenPos.x);
+        } else if (ArenaBoard.isWaitingOn(player)) {
+            // the game waits on them: a ring that turns at once (the thinking bubble comes after a while), and words on hover
+            drawWaitingRing(g, cx, cy, d);
+            if (isPointerOver(v)) {
+                if (st.waitingText == null) {
+                    st.waitingText = Forge.getLocalizer().getMessage("lblArenaWaitingFor", player.getName());
+                }
+                ArenaArt.hint(g, st.waitingText, hf, cx, hintTop, -v.screenPos.x, ArenaBoard.windowW() - v.screenPos.x);
+            }
+        }
+        if (!opponent) { // unblocked attackers that would kill you: said above your portrait while it can still change
+            final int incoming = ArenaBoard.incomingDamage();
+            if (incoming > 0 && incoming >= player.getLife()) {
+                if (incoming != st.lethalFor || st.lethalText == null) {
+                    st.lethalFor = incoming;
+                    st.lethalText = Forge.getLocalizer().getMessage("lblArenaLethalIncoming", String.valueOf(incoming));
+                }
+                final float pulse = 0.6f + 0.4f * ArenaMotion.pulse(1.2f);
+                ArenaArt.hint(g, st.lethalText, hf, cx, cy - d / 2f - ArenaArt.hintHeight(hf) - ArenaTheme.px(8), -v.screenPos.x,
+                        ArenaBoard.windowW() - v.screenPos.x, ArenaTheme.alpha(LIFE_LOST, pulse, S2), LIFE_LOST);
+            }
+        }
 
         final float up = st.floatUp.get();
         if (up < 1f && st.floatText != null) {
@@ -127,12 +167,46 @@ public final class ArenaPortrait implements ArenaSkin<forge.screens.match.views.
         return true;
     }
 
+    /** Whether the mouse is over the portrait now (the hover flag can outlive a click elsewhere). */
+    private static boolean isPointerOver(final VAvatar v) {
+        return Forge.magnify && v.screenPos.contains(Forge.mouseMovedX, Forge.mouseMovedY);
+    }
+
+    /** The hint plate's text against the life plate's height. */
+    private static final float HINT_SHARE = 0.36f;
+
+    /** The share of the life plate's height a chip beside it takes. */
+    private static final float CHIP_SHARE = 0.56f;
+
+    private static final Color WAITING = ArenaTheme.rgb(0xBFE3FF);
+
+    /** A ring of light running round the portrait while the game waits on this player. */
+    private static void drawWaitingRing(final Graphics g, final float cx, final float cy, final float d) {
+        final float t = ArenaMotion.seconds() * 1.4f;
+        final float r = d / 2f + Math.max(2f, d * 0.06f);
+        final int dots = 12;
+        for (int i = 0; i < dots; i++) {
+            final double a = (i / (double) dots + t) * 2 * Math.PI;
+            final float glow = 0.25f + 0.75f * (float) Math.pow(0.5 + 0.5 * Math.cos(i * 2 * Math.PI / dots), 3);
+            g.fillSmoothCircle(ArenaTheme.alpha(WAITING, glow, S3), cx + (float) Math.cos(a) * r, cy + (float) Math.sin(a) * r, Math.max(1.5f, d * 0.03f));
+        }
+        ArenaMotion.requestFrame();
+    }
+
+    /** "Click to choose X" (a target, a player to pick); made once per portrait. */
+    private static String hintText(final State st, final PlayerView player) {
+        if (st.hintText == null) {
+            st.hintText = Forge.getLocalizer().getMessage("lblArenaHintChoose", player.getName());
+        }
+        return st.hintText;
+    }
+
     private static int ringFor(final PlayerView player, final boolean hovered) {
         final MatchController mc = MatchController.instance;
         if (mc.isHighlighted(player)) {
             return RING_CHOSEN;
         }
-        if (mc.isSelectable(player)) {
+        if (mc.isSelectable(player) || ArenaBoard.isAttackOption(player)) {
             return RING_SELECTABLE;
         }
         if (isStackTarget(player)) {
@@ -210,7 +284,7 @@ public final class ArenaPortrait implements ArenaSkin<forge.screens.match.views.
         if (image instanceof FImageComplex) {
             final TextureRegion r = ((FImageComplex) image).getTextureRegion();
             if (r != null) {
-                ArenaArt.circleImage(g, squareOf(r), cx, cy, d);
+                ArenaArt.circleImage(g, ArenaArt.squareOf(r), cx, cy, d);
                 if (lost) {
                     g.fillSmoothCircle(ArenaTheme.alpha(ArenaTheme.BLACK, 0.55f, S1), cx, cy, d / 2f);
                 }
@@ -223,19 +297,6 @@ public final class ArenaPortrait implements ArenaSkin<forge.screens.match.views.
             final float corner = d * 0.21f;
             g.drawSmoothCircle(corner, ArenaTheme.NIGHT, cx, cy, d / 2f + corner);
         }
-    }
-
-    /** The middle square of a picture, so a circle crop is round. Shared scratch region. */
-    private static TextureRegion squareOf(final TextureRegion r) {
-        final int w = r.getRegionWidth(), h = r.getRegionHeight();
-        if (w == h) {
-            return r;
-        }
-        final int s = Math.min(w, h);
-        SQUARE.setTexture(r.getTexture());
-        SQUARE.setRegion(r.getRegionX() + (w - s) / 2, r.getRegionY() + (h - s) / 2, s, s);
-        SQUARE.flip(r.isFlipX(), r.isFlipY());
-        return SQUARE;
     }
 
     /** The plate under the portrait with the life total on it; red at 5 or less. */
@@ -257,66 +318,6 @@ public final class ArenaPortrait implements ArenaSkin<forge.screens.match.views.
         final float o = Math.max(1f, h / 26f);
         g.drawText(life, f, ArenaTheme.alpha(ArenaTheme.BLACK, 0.55f, S1), x, y + o, w, h, false, Align.center, true);
         ArenaArt.textBold(g, life, f, low ? LOW_TOP : ArenaTheme.WHITE, x, y, w, h, Align.center);
-    }
-
-    private static void drawPoison(final Graphics g, final State st, final PlayerView player, final float x, final float cy, final float plateH) {
-        final int poison = player.getCounters(CounterEnumType.POISON);
-        if (poison <= 0) {
-            return;
-        }
-        if (poison != st.poisonFor) {
-            st.poisonFor = poison;
-            st.poisonText = "☠ " + poison;
-        }
-        final FSkinFont f = ArenaCards.evenFont(plateH * 0.42f);
-        final float h = plateH * 0.62f, w = ArenaArt.textWidth(st.poisonText, f) + h;
-        g.fillSmoothRoundRect(ArenaTheme.alpha(ArenaTheme.NIGHT, 0.9f, S1), x, cy - h / 2f, w, h, h / 2f);
-        g.drawSmoothRoundRect(1f, POISON, x, cy - h / 2f, w, h, h / 2f);
-        g.drawText(st.poisonText, f, POISON, x, cy - h / 2f, w, h, false, Align.center, true);
-    }
-
-    private static final Color CMDR = ArenaTheme.rgb(0xE8C27A), CMDR_NEAR = ArenaTheme.rgb(0xFF6A5C);
-
-    /** Chips left of the life plate: the commander damage this player has taken from each opposing commander. */
-    private static void drawCommanderDamage(final Graphics g, final State st, final PlayerView player, final float right, final float cy,
-            final float plateH) {
-        final GameView game = MatchController.instance.getGameView();
-        if (game == null || game.getPlayers() == null) {
-            return;
-        }
-        int n = 0;
-        for (final PlayerView other : game.getPlayers()) {
-            if (other == player || other.getCommanders() == null) {
-                continue;
-            }
-            for (final forge.game.card.CardView cmdr : other.getCommanders()) {
-                if (n >= st.cmdrText.length) {
-                    break;
-                }
-                final int damage = player.getCommanderDamage(cmdr);
-                if (damage <= 0) {
-                    continue;
-                }
-                if (st.cmdrFor[n] != damage || st.cmdrText[n] == null) {
-                    st.cmdrFor[n] = damage;
-                    st.cmdrText[n] = forge.Forge.getLocalizer().getMessage("lblArenaCommanderDamage", String.valueOf(damage));
-                    st.cmdrNear[n] = damage >= 15;
-                }
-                n++;
-            }
-        }
-        final FSkinFont f = ArenaCards.evenFont(plateH * 0.38f);
-        final float h = plateH * 0.56f;
-        float x = right;
-        for (int i = 0; i < n; i++) {
-            final float w = ArenaArt.textWidth(st.cmdrText[i], f) + h;
-            x -= w;
-            final Color c = st.cmdrNear[i] ? CMDR_NEAR : CMDR;
-            g.fillSmoothRoundRect(ArenaTheme.alpha(ArenaTheme.NIGHT, 0.9f, S1), x, cy - h / 2f, w, h, h / 2f);
-            g.drawSmoothRoundRect(1f, c, x, cy - h / 2f, w, h, h / 2f);
-            g.drawText(st.cmdrText[i], f, c, x, cy - h / 2f, w, h, false, Align.center, true);
-            x -= ArenaTheme.px(4);
-        }
     }
 
     /** Arena shows an opponent who is taking long to decide as a speech bubble with rippling dots beside the portrait. */

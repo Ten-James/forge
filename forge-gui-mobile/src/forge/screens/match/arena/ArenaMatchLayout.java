@@ -19,7 +19,8 @@ import forge.toolbox.FButton;
  *     above the local portrait (its bottom at 71% of the height);</li>
  * <li>the corner menu (gear and log buttons) in the top right corner;</li>
  * <li>the stack, docked on the right ({@link #stackDock}), the log, docked on the left ({@link #logDock}), both
- *     toggled from the corner menu or with S / L.</li>
+ *     toggled from the corner menu or with S / L; with seats they sit below the seats.</li>
+
  * </ul>
  * Sizes are fractions of the screen, so 21:9 and 16:9 both work; fixed Swing pixel sizes go through
  * {@link ArenaTheme#px}. Each player panel lays out its own inside ({@code VPlayerPanel.doArenaLayout}, with the
@@ -137,16 +138,31 @@ public final class ArenaMatchLayout {
         return out.set(w - cw - gap, gap, cw, s);
     }
 
-    /** The stack's dock: the right side, under the corner (Swing REPORT cell). */
+    /**
+     * With three or four players the docks go below the seats (their glass is {@link #SEAT_DOCK_TOP} of the height
+     * tall), a little shorter so they end above the priority buttons: at the Swing height they would cover the right
+     * (or left) seat's whole battlefield, where a two-player board only has the opponent's front row there.
+     */
+    public static final float SEAT_DOCK_TOP = 0.36f, SEAT_DOCK_H = 0.38f;
+
+    private static float dockTop(final float h) {
+        return Math.round(h * (ArenaBoard.isSeatGame() ? SEAT_DOCK_TOP : DOCK_TOP));
+    }
+
+    private static float dockHeight(final float h) {
+        return Math.round(h * (ArenaBoard.isSeatGame() ? SEAT_DOCK_H : DOCK_H));
+    }
+
+    /** The stack's dock: the right side, under the corner (Swing REPORT cell); below the seats in a bigger game. */
     public static Rectangle stackDock(final float w, final float h, final Rectangle out) {
         final float dw = Math.max(ArenaTheme.px(300), Math.round(w * DOCK_W));
-        return out.set(w - dw - Math.round(w * DOCK_MARGIN), Math.round(h * DOCK_TOP), dw, Math.round(h * DOCK_H));
+        return out.set(w - dw - Math.round(w * DOCK_MARGIN), dockTop(h), dw, dockHeight(h));
     }
 
     /** The log's dock: the left side, the same size as the stack's. */
     public static Rectangle logDock(final float w, final float h, final Rectangle out) {
         final float dw = Math.max(ArenaTheme.px(300), Math.round(w * DOCK_W));
-        return out.set(Math.round(w * DOCK_MARGIN), Math.round(h * DOCK_TOP), dw, Math.round(h * DOCK_H));
+        return out.set(Math.round(w * DOCK_MARGIN), dockTop(h), dw, dockHeight(h));
     }
 
     /** What dropdowns may cover: the whole board (the prompt floats, it is not a strip any more). */
