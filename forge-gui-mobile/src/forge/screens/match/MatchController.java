@@ -58,6 +58,10 @@ import forge.interfaces.IGameController;
 import forge.gui.FThreads;
 import forge.gui.GuiBase;
 import forge.gui.util.SGuiChoose;
+import forge.screens.match.arena.ArenaChoices;
+import forge.screens.match.arena.ArenaDamageOverlay;
+import forge.screens.match.arena.ArenaTheme;
+import forge.toolbox.GuiChoose;
 import forge.gui.util.SOptionPane;
 import forge.item.PaperCard;
 import forge.localinstance.properties.ForgePreferences;
@@ -412,6 +416,8 @@ public class MatchController extends NetworkGuiGame {
 
     @Override
     public void updateTurn(final PlayerView player) {
+        //the Arena board says whose turn it is on a band across the board (nothing with the look off)
+        forge.screens.match.arena.ArenaTurnBanner.showTurn(player, player != null && isLocalPlayer(player));
     }
 
     @Override
@@ -480,6 +486,16 @@ public class MatchController extends NetworkGuiGame {
         }
         if (abilities.size() == 1) {
             return abilities.get(0);
+        }
+        if (ArenaTheme.isMatchBoard()) { //Arena look: the card stands beside its abilities
+            return new WaitCallback<SpellAbilityView>() {
+                @Override
+                public void run() {
+                    if (!ArenaChoices.chooseAbility(hostCard, abilities, this)) {
+                        GuiChoose.oneOrNone(Forge.getLocalizer().getMessage("lblChooseAbilityToPlay"), abilities, this);
+                    }
+                }
+            }.invokeAndWait();
         }
         return SGuiChoose.oneOrNone(Forge.getLocalizer().getMessage("lblChooseAbilityToPlay"), abilities);
     }
@@ -552,6 +568,9 @@ public class MatchController extends NetworkGuiGame {
         return new WaitCallback<Map<CardView, Integer>>() {
             @Override
             public void run() {
+                if (ArenaDamageOverlay.assignCombatDamage(attacker, blockers, damage, defender, overrideOrder, maySkip, this)) {
+                    return; //Arena look on the match screen
+                }
                 final VAssignCombatDamage v = new VAssignCombatDamage(attacker, blockers, damage, defender, overrideOrder, maySkip, this);
                 v.show();
             }
@@ -564,6 +583,9 @@ public class MatchController extends NetworkGuiGame {
         return new WaitCallback<Map<Object, Integer>>() {
             @Override
             public void run() {
+                if (ArenaDamageOverlay.assignGenericAmount(effectSource, targets, amount, atLeastOne, amountLabel, this)) {
+                    return; //Arena look on the match screen
+                }
                 final VAssignGenericAmount v = new VAssignGenericAmount(effectSource, targets, amount, atLeastOne, amountLabel, this);
                 v.show();
             }
@@ -607,6 +629,8 @@ public class MatchController extends NetworkGuiGame {
     public void setSelection(final Selection selection) {
         final Selection prev = getSelection();
         super.setSelection(selection);
+        //the Arena look: cards to pick from zones the board does not show (a graveyard, exile...) open in the card browser
+        forge.screens.match.arena.ArenaCardBrowser.followSelection(selection);
         final boolean stackOffered = selection.offersStackItems() && !prev.offersStackItems();
         FThreads.invokeInEdtLater(() -> {
             if (stackOffered && !view.getStack().isVisible()) { // stack items are picked in the stack view, so bring it up
@@ -716,6 +740,24 @@ public class MatchController extends NetworkGuiGame {
         instance.seedYieldStateOnHost();
     }
 
+    /**
+     * Sets (or, pressed again, clears) the auto-pass marker on {@code phaseOwner}'s {@code phase}, as a long press on
+     * that phase label does. Used by the Arena look's pass-until keyboard shortcuts.
+     */
+    public static void toggleYieldMarker(final PlayerView phaseOwner, final PhaseType phase) {
+        if (phaseOwner == null || view == null) {
+            return;
+        }
+        final VPlayerPanel panel = MatchScreen.getPlayerPanels().get(phaseOwner);
+        final VPhaseIndicator.PhaseLabel label = panel == null ? null : panel.getPhaseIndicator().getLabel(phase);
+        instance.handleYieldMarkerToggle(phaseOwner, phase, () -> {
+            if (label != null) {
+                label.setStopAtPhase(true);
+            }
+            instance.pushSkipPhaseToControllers(phaseOwner, phase);
+        });
+    }
+
     public static void writeMatchPreferences() {
         if (Forge.lifecycleClosing)
             return;
@@ -798,6 +840,10 @@ public class MatchController extends NetworkGuiGame {
         return new WaitCallback<GameEntityView>() {
             @Override
             public void run() {
+                //Arena look: the revealed cards in the browser, then the choice, both over the match
+                if (ArenaChoices.chooseEntity(title, optionList, delayedReveal.getMessagePrefix(), delayedReveal.getCards(), isOptional, this)) {
+                    return;
+                }
                 final GameEntityPicker picker = new GameEntityPicker(title, optionList, delayedReveal, isOptional, this);
                 picker.show();
             }

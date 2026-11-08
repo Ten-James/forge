@@ -112,6 +112,7 @@ public class ForgePreferences extends AbstractPreferences<ForgePreferences.FPref
         UI_DETAILED_SPELLDESC_IN_PROMPT ("true"),
         UI_GRAY_INACTIVE_TEXT ("true"),
         UI_SKIN ("Default"),
+        /** The Arena look of matches, in both the Swing client and the libGDX client (desktop, and Android/iOS in landscape). */
         UI_ARENA_THEME ("true"),
         UI_CJK_FONT (""),
         UI_TARGETING_OVERLAY ("2"),

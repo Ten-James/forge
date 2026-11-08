@@ -52,6 +52,8 @@ import forge.screens.home.NewGameMenu;
 import forge.screens.match.DiceOverlay;
 import forge.screens.match.MatchController;
 import forge.screens.match.MatchScreen;
+import forge.screens.match.arena.ArenaCurtain;
+import forge.screens.match.arena.ArenaMotion;
 import forge.screens.settings.CardImageBrowserScreen;
 import forge.sound.MusicPlaylist;
 import forge.sound.SoundSystem;
@@ -948,6 +950,8 @@ public class Forge implements ApplicationListener {
         //dispose card textures handled by assetmanager
         boolean dispose = toNewScreen.toLowerCase().contains("homescreen") && disposeTextures;
         try {
+            //Arena look: into, out of or between matches the old screen fades over the new one (a picture taken now)
+            ArenaCurtain.onScreenChange(currentScreen, screen0);
             endKeyInput(); //end key input before switching screens
             ForgeAnimation.endAll(); //end all active animations before switching screens
             currentScreen = screen0;
@@ -980,6 +984,7 @@ public class Forge implements ApplicationListener {
 
         ImageCache.getInstance().allowSingleLoad();
         ForgeAnimation.advanceAll();
+        ArenaMotion.tick(); // Arena look: its animation clock (asks for the next frame itself while anything moves)
 
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT); // Clear the screen.
         float delta = Gdx.graphics.getDeltaTime();
@@ -1010,6 +1015,11 @@ public class Forge implements ApplicationListener {
         Classic.getInstance().render(screen);
         DiceOverlay.getInstance().render();
         FrameRate.getInstance().render(showFPS);
+    }
+
+    /** What is on the window now: the closing, transition, current or splash screen, in that priority. */
+    public static FContainer getDisplayedScreen() {
+        return getHierachyScreen();
     }
 
     private static FContainer getHierachyScreen() {
@@ -1453,6 +1463,30 @@ public class Forge implements ApplicationListener {
                     }
                 }
                 return false;
+            } catch (Exception ex) {
+                BugReporter.reportException(ex);
+                return true;
+            }
+        }
+
+        @Override
+        protected boolean secondaryClick(float x, float y) {
+            if (!forge.screens.match.arena.ArenaTheme.isMatchBoard()) {
+                return false; //elsewhere a right click toggles the magnifier, as it always has
+            }
+            //the Arena board: what a long press does under the pointer (zoom a card, a stack entry's or a player's
+            //details, mark a phase to pass to), else back out of the decision being made
+            try {
+                for (FDisplayObject listener : potentialListeners) {
+                    if (listener.longPress(listener.screenToLocalX(x), listener.screenToLocalY(y))) {
+                        return true;
+                    }
+                }
+                final MatchScreen match = MatchController.getView();
+                if (match != null && currentScreen == match) {
+                    match.arenaBackOut();
+                }
+                return true;
             } catch (Exception ex) {
                 BugReporter.reportException(ex);
                 return true;

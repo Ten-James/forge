@@ -45,6 +45,7 @@ import forge.game.phase.PhaseType;
 import forge.game.player.PlayerView;
 import forge.game.zone.ZoneType;
 import forge.gamemodes.match.YieldController;
+import forge.gamemodes.match.YieldUpdate;
 import forge.gui.GuiBase;
 import forge.interfaces.IGameController;
 import forge.localinstance.properties.ForgePreferences;
@@ -58,6 +59,12 @@ import forge.model.FModel;
 import forge.player.AutoYieldStore.TriggerDecision;
 import forge.player.PlayerZoneUpdate;
 import forge.screens.FScreen;
+import forge.screens.match.arena.ArenaBoardPainter;
+import forge.screens.match.arena.ArenaCornerMenu;
+import forge.screens.match.arena.ArenaMatchLayout;
+import forge.screens.match.arena.ArenaTheme;
+import forge.screens.match.arena.ArenaShortcutSheet;
+import forge.screens.match.arena.ArenaShortcuts;
 import forge.screens.match.views.VCardDisplayArea.CardAreaPanel;
 import forge.screens.match.views.VPhaseIndicator.PhaseLabel;
 import forge.screens.match.views.VPlayerPanel.InfoTab;
@@ -95,6 +102,14 @@ public class MatchScreen extends FScreen {
     private static List<FDisplayObject> potentialListener;
     private int selectedPlayer;
 
+
+    // the Arena board
+    private final ArenaCornerMenu cornerMenu;
+    private boolean arenaLaidOut;
+    private ArenaMatchLayout.PromptMode arenaPromptMode;
+    private float arenaPromptHeight = -1;
+    private final Rectangle arenaRect = new Rectangle();
+    private final Runnable arenaThemeListener = this::onArenaThemeChanged;
 
     private final Map<Integer, Vector2> endpoints;
     private final Set<CardView> cardsonBattlefield;
@@ -201,6 +216,82 @@ public class MatchScreen extends FScreen {
             add(unifiedPhase);
             add(unifiedPhase.getMenu()); //above the header, so it opens over the field
         }
+        //the Arena board has no menu bar: two round buttons in the top right corner take its place
+        ArenaMatchLayout.setBoardPossible(topPlayerPrompt == null); //two prompts at opposite ends: the default layout
+        cornerMenu = add(new ArenaCornerMenu(this));
+        cornerMenu.setVisible(false);
+        ArenaTheme.addListener(arenaThemeListener);
+    }
+
+    /** Whether the match is drawn as the Arena board (the look is on, landscape, and not the two-prompt hot seat layout). */
+    public boolean isArenaBoard() {
+        return ArenaMatchLayout.applies();
+    }
+
+    public ArenaCornerMenu getCornerMenu() {
+        return cornerMenu;
+    }
+
+    /** The Arena look was switched on or off: lay the whole match out again, rows sorted the new way. */
+    private void onArenaThemeChanged() {
+        for (VPlayerPanel panel : playerPanelsList) {
+            panel.getField().update(true);
+            panel.revalidate(true);
+        }
+        revalidate();
+    }
+
+    /**
+     * The Arena board (port of the Swing match_arena layout): the two fields tile the whole window, the menu bar gives
+     * way to the corner menu, and the prompt floats over the board where its kind belongs (see ArenaMatchLayout).
+     */
+    private void doArenaLayout(float width, float height) {
+        arenaLaidOut = true;
+        getHeader().setVisible(false);
+        if (menuBarShown) {
+            menuBarShown = false;
+            menuBarHideTask.cancel();
+        }
+        unifiedPhase.setVisible(false);
+        unifiedPhase.getMenu().close();
+        scroller.setBounds(0, 0, width, height);
+        cornerMenu.setVisible(true);
+        ArenaMatchLayout.cornerMenu(width, height, arenaRect);
+        cornerMenu.setBounds(arenaRect.x, arenaRect.y, arenaRect.width, arenaRect.height);
+        placeArenaPrompt(width, height);
+    }
+
+    /** Puts the prompt where its kind goes: priority in the corner, a decision above the portrait, hidden while waiting. */
+    private void placeArenaPrompt(float width, float height) {
+        final ArenaMatchLayout.PromptMode mode = bottomPlayerPrompt.getArenaMode();
+        arenaPromptMode = mode;
+        bottomPlayerPrompt.setVisible(mode != null);
+        if (mode == null) {
+            arenaPromptHeight = -1;
+            return;
+        }
+        if (mode == ArenaMatchLayout.PromptMode.PRIORITY) {
+            ArenaMatchLayout.promptBounds(mode, width, height, arenaRect);
+            arenaPromptHeight = -1;
+        } else {
+            final float pw = Math.max(ArenaTheme.px(340), Math.round(height * 0.4f));
+            final float ph = bottomPlayerPrompt.getArenaDecisionHeight(pw, height);
+            arenaPromptHeight = ph;
+            arenaRect.set(Math.round((width - pw) / 2), Math.max(ArenaTheme.px(8), Math.round(height * ArenaMatchLayout.DECISION_BOTTOM) - ph), pw, ph);
+        }
+        bottomPlayerPrompt.setArenaMode(mode);
+        bottomPlayerPrompt.setBounds(arenaRect.x, arenaRect.y, arenaRect.width, arenaRect.height);
+        bottomPlayerPrompt.revalidate();
+    }
+
+    /** Leaving the Arena board: the menu bar comes back, the corner menu goes. */
+    private void leaveArenaLayout() {
+        arenaLaidOut = false;
+        getHeader().setVisible(true);
+        cornerMenu.setVisible(false);
+        cornerMenu.closeGear();
+        bottomPlayerPrompt.setVisible(true);
+        bottomPlayerPrompt.setArenaMode(null);
     }
 
     //compact layout with a hidden top menu: the bar slides over the top of the field for a few seconds when the menu button
@@ -367,8 +458,30 @@ public class MatchScreen extends FScreen {
         return log;
     }
 
+    /** The cards revealed during the game (the default layout's reveal tab; the Arena corner menu opens it). */
+    public VReveal getRevealed() {
+        return revealed;
+    }
+
     public VStack getStack() {
         return stack;
+    }
+
+    public VGameMenu getGameMenu() {
+        return gameMenu;
+    }
+
+    public VPlayers getPlayersMenu() {
+        return players;
+    }
+
+    public VDevMenu getDevMenu() {
+        return devMenu;
+    }
+
+    /** The chat, or null outside network play. */
+    public VChat getChat() {
+        return chat;
     }
 
     public VPlayerPanel getTopPlayerPanel() {
@@ -397,6 +510,7 @@ public class MatchScreen extends FScreen {
 
     @Override
     public void onClose(Consumer<Boolean> canCloseCallback) {
+        ArenaTheme.removeListener(arenaThemeListener);
         MatchController.writeMatchPreferences();
         SoundSystem.instance.setBackgroundMusic(MusicPlaylist.MENUS);
         if (chat != null) {
@@ -407,6 +521,13 @@ public class MatchScreen extends FScreen {
 
     @Override
     protected void doLayout(float startY, float width, float height) {
+        if (isArenaBoard()) {
+            doArenaLayout(width, height);
+            return;
+        }
+        if (arenaLaidOut) {
+            leaveArenaLayout();
+        }
         ((FMenuBar) getHeader()).setGlass(VPlayerPanel::isFrosted);
         if (topPlayerPrompt == null) {
             final boolean hidden = VPlayerPanel.isMenuHidden();
@@ -459,6 +580,9 @@ public class MatchScreen extends FScreen {
 
     @Override
     public Rectangle getDropDownBoundary() {
+        if (isArenaBoard()) { //the prompt floats on the Arena board: menus may cover the whole window
+            return ArenaMatchLayout.dropDownBoundary(getWidth(), getHeight(), new Rectangle());
+        }
         if (topPlayerPrompt == null) {
             return new Rectangle(0, 0, getWidth(), getHeight() - VPrompt.HEIGHT); //prevent covering prompt
         }
@@ -472,7 +596,16 @@ public class MatchScreen extends FScreen {
             return;
         }
 
-        if (topPlayerPrompt == null) { //the reveal tab is as wide as the player panels' control column
+        if (arenaLaidOut && isArenaBoard()) {
+            //the prompt's kind follows its buttons: move it when that changes (a decision also when its message does)
+            final ArenaMatchLayout.PromptMode mode = bottomPlayerPrompt.getArenaMode();
+            final boolean decisionResized = mode == ArenaMatchLayout.PromptMode.DECISION
+                    && bottomPlayerPrompt.getArenaDecisionHeight(bottomPlayerPrompt.getWidth(), getHeight()) != arenaPromptHeight;
+            if (mode != arenaPromptMode || decisionResized) {
+                placeArenaPrompt(getWidth(), getHeight());
+                forge.screens.match.arena.ArenaMotion.requestFrame();
+            }
+        } else if (topPlayerPrompt == null) { //the reveal tab is as wide as the player panels' control column
             ((FMenuBar) getHeader()).setRevealWidth(VPlayerPanel.isCompactLayout() ? liveBottom().getColumnWidth() : 0f);
         }
         syncStackWithMenus();
@@ -502,6 +635,7 @@ public class MatchScreen extends FScreen {
 
         drawArcs(g);
         CardFlightOverlay.draw(g, bottomPlayerPanel.getPlayer(), getHeight());
+        forge.screens.match.arena.ArenaTurnBanner.draw(g, getWidth(), getHeight());
         drawCardPreview(g);
     }
 
@@ -529,7 +663,37 @@ public class MatchScreen extends FScreen {
                 && FModel.getPreferences().getPrefBoolean(FPref.UI_ENABLE_MAGNIFIER);
     }
 
+    /**
+     * The Arena hover preview: the card under the pointer, large, beside it (a hand card rises over its slot), with a
+     * status panel for what its face does not show. Called every frame, with null when nothing is hovered so that the
+     * preview fades out rather than vanishing.
+     */
+    private void drawArenaPreview(Graphics g) {
+        CardView card = null;
+        Rectangle at = null;
+        boolean inHand = false;
+        if (!CardZoom.isOpen() && potentialListener != null && isHoverPreviewEnabled()) {
+            for (FDisplayObject object : potentialListener) {
+                if (object == null || !object.isHovered()) { continue; }
+                if (object instanceof CardAreaPanel panel) {
+                    card = panel.getCard();
+                    at = panel.screenPos;
+                    inHand = panel.isArenaHandCard();
+                } else if (object instanceof FCardPanel cardPanel) {
+                    card = cardPanel.getCard();
+                    at = cardPanel.screenPos;
+                }
+                if (card != null) { break; }
+            }
+        }
+        forge.screens.match.arena.ArenaCardPreview.drawHover(g, card, at, inHand, getWidth(), getHeight());
+    }
+
     private void drawCardPreview(Graphics g) {
+        if (isArenaBoard()) {
+            drawArenaPreview(g);
+            return;
+        }
         if (!Forge.isLandscapeMode() || CardZoom.isOpen()) { return; }
         try {
             CardView card = null;
@@ -630,12 +794,20 @@ public class MatchScreen extends FScreen {
                 x = Math.max(left, Math.min(x, right - w));
                 y = a.y + a.height / 2 - h / 2;
             }
-            y = Math.max(scroller.screenPos.y, Math.min(y, bottomPlayerPrompt.screenPos.y - h));
+            if (isArenaBoard()) { //the prompt floats in a corner on the Arena board: only the window bounds the preview
+                y = Math.max(getHeight() * 0.02f, Math.min(y, getHeight() * 0.98f - h));
+            } else {
+                y = Math.max(scroller.screenPos.y, Math.min(y, bottomPlayerPrompt.screenPos.y - h));
+            }
             //open dropdowns draw over the preview, so it moves to their left instead of ending up under them
             if (getStack().isVisible()) { x = moveLeftOfObstacle(getStack().screenPos, x, y, w, h, a, left); }
             if (unifiedPhase.getMenu().isOpen()) { x = moveLeftOfObstacle(unifiedPhase.getMenu().screenPos, x, y, w, h, a, left); }
 
-            if (Forge.magnifyShowDetails) {
+            if (isArenaBoard() && !Forge.magnifyShowDetails) { //the Arena preview: the card on a soft shadow with a thin rim
+                forge.screens.match.arena.ArenaCards.cardShadow(g, x, y, w, h, w * 0.045f);
+                CardRenderer.drawCard(g, card, x, y, w, h, CardRenderer.CardStackPosition.Top, false, false, true);
+                g.drawSmoothRoundRect(1.5f, forge.screens.match.arena.ArenaTheme.alpha(forge.screens.match.arena.ArenaTheme.GOLD, 0.55f), x, y, w, h, w * 0.045f);
+            } else if (Forge.magnifyShowDetails) {
                 CardImageRenderer.drawDetails(g, card, MatchController.instance.getGameView(), false, x, y, w, h);
             } else {
                 CardRenderer.drawCard(g, card, x, y, w, h, CardRenderer.CardStackPosition.Top, false, false, true);
@@ -727,11 +899,125 @@ public class MatchScreen extends FScreen {
         return attached != null && attached.iterator().hasNext();
     }
 
+    /**
+     * The keyboard shortcuts the Arena look adds ({@link ArenaShortcuts}, those not {@code existing}); the ones keyDown
+     * already had stay in its switch, so both looks answer them the same way. Z zooms the card under the pointer.
+     */
+    private boolean arenaShortcut(int keyCode) {
+        final ArenaShortcuts.Action action = ArenaShortcuts.match(keyCode);
+        if (action == null || ArenaShortcuts.get(action).existing) {
+            return false;
+        }
+        switch (action) {
+            case PASS_UNTIL_STACK_RESOLVES: {
+                final IGameController controller = getGameController();
+                final PlayerView local = MatchController.instance.getCurrentPlayer();
+                final GameView gameView = MatchController.instance.getGameView();
+                if (controller == null || local == null || gameView == null || gameView.getStack().isEmpty()) {
+                    return false;
+                }
+                controller.sendYieldUpdate(new YieldUpdate.StackYield(local, true, true));
+                return true;
+            }
+            case PASS_UNTIL_MY_TURN:
+                MatchController.toggleYieldMarker(MatchController.instance.getCurrentPlayer(), PhaseType.UPKEEP);
+                return true;
+            case PASS_UNTIL_NEXT_TURN:
+                MatchController.toggleYieldMarker(nextTurnPlayer(), PhaseType.UPKEEP);
+                return true;
+            case OPEN_LOG:
+                if (isArenaBoard()) { cornerMenu.toggleLog(); } else { toggleDropDown(log); }
+                return true;
+            case OPEN_STACK:
+                if (isArenaBoard()) { cornerMenu.toggleStack(); } else { toggleDropDown(stack); }
+                return true;
+            case OPEN_MENU:
+                if (isArenaBoard()) { cornerMenu.toggleGear(); } else { toggleDropDown(gameMenu); }
+                return true;
+            case ZOOM_CARD:
+                return zoomHoveredCard();
+            case SHOW_SHORTCUTS:
+                ArenaShortcutSheet.open();
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /** Z: the card under the pointer, large (the Arena focus view on the Arena board); the stack's entries too. */
+    private boolean zoomHoveredCard() {
+        if (potentialListener == null) {
+            return false;
+        }
+        for (FDisplayObject object : potentialListener) {
+            if (object == null || !object.isHovered()) { continue; }
+            if (object instanceof CardAreaPanel panel) {
+                panel.showZoom();
+                return true;
+            }
+            if (object instanceof FCardPanel cardPanel && cardPanel.getCard() != null) {
+                CardZoom.show(cardPanel.getCard());
+                return true;
+            }
+            if (object instanceof VStack.StackInstanceDisplay item) {
+                CardZoom.show(item.stackInstance.getSourceCard());
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * A right click on the Arena board away from any card backs out: it closes an open menu, or cancels the decision
+     * being made (never ends the turn: the priority prompt's End Turn is not a way back).
+     */
+    public boolean arenaBackOut() {
+        if (cornerMenu.closeMenus()) {
+            return true;
+        }
+        final VPrompt prompt = getActivePrompt();
+        if (prompt.getArenaMode() == forge.screens.match.arena.ArenaMatchLayout.PromptMode.DECISION && prompt.getBtnCancel().isEnabled()) {
+            return prompt.getBtnCancel().trigger();
+        }
+        return false;
+    }
+
+    /** Whose turn comes after the current one (the next player still in the game, in seat order). */
+    private static PlayerView nextTurnPlayer() {
+        final GameView gameView = MatchController.instance.getGameView();
+        if (gameView == null || gameView.getPlayers() == null || gameView.getPlayerTurn() == null) {
+            return null;
+        }
+        final List<PlayerView> players = new ArrayList<>();
+        for (final PlayerView p : gameView.getPlayers()) {
+            players.add(p);
+        }
+        final int turn = players.indexOf(gameView.getPlayerTurn());
+        for (int i = 1; i <= players.size(); i++) {
+            final PlayerView p = players.get(Math.floorMod(turn + i, players.size()));
+            if (!p.getHasLost()) {
+                return p;
+            }
+        }
+        return null;
+    }
+
+    private static void toggleDropDown(final FDropDown dropDown) {
+        if (dropDown.isVisible()) {
+            dropDown.hide();
+        } else {
+            dropDown.show();
+        }
+    }
+
     @Override
     public boolean keyDown(int keyCode) {
         // TODO: make the keyboard shortcuts configurable on Mobile
         if (Forge.hasGamepad() && ((FMenuBar) getHeader()).isShowingMenu(false) && (keyCode == Keys.ESCAPE || keyCode == Keys.ENTER))
             return false;
+        if (ArenaMatchLayout.desktop() && arenaShortcut(keyCode)) {
+            return true;
+        }
         switch (keyCode) {
             case Keys.DPAD_DOWN:
                 if (!((FMenuBar) getHeader()).isShowingMenu(true)) {
@@ -979,6 +1265,8 @@ public class MatchScreen extends FScreen {
 
     public void resetFields() {
         CardAreaPanel.resetForNewGame();
+        forge.screens.match.arena.ArenaCardPreview.clear();
+        forge.screens.match.arena.ArenaTurnBanner.clear();
         for (VPlayerPanel playerPanel : getPlayerPanels().values()) {
             for (CardAreaPanel p : playerPanel.getField().getCardPanels()) {
                 p.reset();
@@ -1142,6 +1430,13 @@ public class MatchScreen extends FScreen {
 
         @Override
         public void drawBackground(Graphics g) {
+            if (arenaLaidOut && isArenaBoard()) { //the Arena's stone floor, drawn on the GPU each frame
+                final String dayTime = MatchController.instance.getDayTime();
+                final ArenaTheme.BoardVariant variant = "Day".equalsIgnoreCase(dayTime) ? ArenaTheme.BoardVariant.DAY
+                        : "Night".equalsIgnoreCase(dayTime) ? ArenaTheme.BoardVariant.NIGHT : ArenaTheme.BoardVariant.DEFAULT;
+                ArenaBoardPainter.draw(g, 0, 0, getWidth(), getHeight(), variant);
+                return;
+            }
             super.drawBackground(g);
             if (!FModel.getPreferences().getPrefBoolean(FPref.UI_MATCH_IMAGE_VISIBLE)) {
                 if (!Forge.isMobileAdventureMode && !hasActivePlane()) {
@@ -1280,6 +1575,9 @@ public class MatchScreen extends FScreen {
                 }
             }
 
+            if (arenaLaidOut && isArenaBoard()) {
+                return; //the Arena board has no lines between the fields
+            }
             float midField;
             float x = 0;
             float y;
@@ -1310,6 +1608,11 @@ public class MatchScreen extends FScreen {
         }
 
         protected ScrollBounds layoutAndGetScrollBounds(float visibleWidth, float visibleHeight) {
+            if (isArenaBoard()) { //the Arena board fits the window: no part of it scrolls or zooms
+                extraHeight = 0;
+                ArenaMatchLayout.layoutPanels(playerPanelsList, visibleWidth, visibleHeight);
+                return new ScrollBounds(visibleWidth, visibleHeight);
+            }
             float totalHeight = visibleHeight + extraHeight;
             int playerCount = playerPanelsList.size(); //not playerPanels, which still holds players who left
             float avatarHeight = VAvatar.HEIGHT;
@@ -1351,6 +1654,9 @@ public class MatchScreen extends FScreen {
 
         @Override
         public boolean zoom(float x, float y, float amount) {
+            if (isArenaBoard()) {
+                return false;
+            }
             //adjust position for current scroll positions
             float staticHeight = 2 * VAvatar.HEIGHT; //take out avatar rows that don't scale
             float oldScrollHeight = getScrollHeight() - staticHeight;
