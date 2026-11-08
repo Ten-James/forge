@@ -214,6 +214,16 @@ public class VStack extends FDropDown {
         return COMPACT_SLIDE_ANIMATED && VPlayerPanel.isCompactLayout();
     }
 
+    /** On the Arena board your rows keep clear of the open stack: lay them out again when it comes and goes. */
+    @Override
+    public void setVisible(boolean visible0) {
+        final boolean was = isVisible();
+        super.setVisible(visible0);
+        if (was != visible0 && isArenaStack() && MatchController.getView() != null && MatchController.getView().getBottomPlayerPanel() != null) {
+            MatchController.getView().getBottomPlayerPanel().getField().revalidate();
+        }
+    }
+
     @Override
     public void show() {
         if (!slides()) {
