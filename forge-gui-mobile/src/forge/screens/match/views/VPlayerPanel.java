@@ -349,8 +349,6 @@ public class VPlayerPanel extends FContainer {
         bringTabsToFront();
         //the Arena board's own parts: piles, name plate, an opponent's hand as card backs (hidden in the default look)
         arenaPiles = add(new ArenaPlayerParts.Piles(player, false, this::openArenaZone));
-        arenaCastables = add(new ArenaPlayerParts.Castables(player));
-        arenaCastables.setVisible(false);
         arenaName = add(new ArenaPlayerParts.NamePlate(player));
         arenaHand = add(new ArenaPlayerParts.OpponentHand(player));
         arenaPiles.setVisible(false);
@@ -374,7 +372,6 @@ public class VPlayerPanel extends FContainer {
         return mx >= part.getLeft() - pad && mx < part.getRight() + pad && my >= part.getTop() - pad && my < part.getBottom() + pad;
     }
     private ArenaPlayerParts.Piles arenaPiles;
-    private ArenaPlayerParts.Castables arenaCastables;
     private ArenaPlayerParts.NamePlate arenaName;
     private ArenaPlayerParts.OpponentHand arenaHand;
     private boolean arenaLaidOut;
@@ -417,7 +414,11 @@ public class VPlayerPanel extends FContainer {
         field.setBounds(0, 0, width, height);
         final float frontH = ArenaBoard.frontTileHeight(local, seat);
         final float backH = ArenaBoard.backTileHeight(local, seat, frontH);
-        field.setArenaRows(ArenaBoard.frontRowTop(local, seat) - top, frontH, ArenaBoard.backRowTop(local, seat) - top, backH);
+        //smaller cards (the card size slider) sit in the middle of the room their rows have at full size
+        final float fullFrontH = ArenaBoard.fullFrontTileHeight(local, seat);
+        final float fullBackH = ArenaBoard.backTileHeight(local, seat, fullFrontH);
+        field.setArenaRows(ArenaBoard.frontRowTop(local, seat) - top + Math.round((fullFrontH - frontH) / 2f), frontH,
+                ArenaBoard.backRowTop(local, seat) - top + Math.round((fullBackH - backH) / 2f), backH);
         field.revalidate();
 
         //the portrait, with the phase ladder on its wings
@@ -457,14 +458,6 @@ public class VPlayerPanel extends FContainer {
         } else if (!ownFan) {
             ArenaBoard.watchedHand(cx + left, arenaRect);
             arenaHand.setBounds(arenaRect.x - left, arenaRect.y - top, arenaRect.width, arenaRect.height);
-        }
-        //what you can cast from outside your hand (your commander...), as plates over your piles
-        arenaCastables.setVisible(ownFan);
-        if (ownFan) {
-            ArenaBoard.piles(true, false, left, width, arenaRect);
-            final float ch = ArenaPlayerParts.Castables.heightFor(ArenaBoard.windowH());
-            arenaCastables.setBounds(arenaRect.x - left, arenaRect.y - top - ch - Math.round(ArenaBoard.windowH() * 0.008f),
-                    Math.round(ArenaBoard.windowW() * 0.22f), ch);
         }
 
         //what floats beside the portrait: mana in the pool (a seat's shows as chips on its name plate, where it has room)
@@ -532,7 +525,6 @@ public class VPlayerPanel extends FContainer {
         phaseIndicator.setVisible(true);
         phaseIndicator.setArenaLadder(0);
         arenaPiles.setVisible(false);
-        arenaCastables.setVisible(false);
         arenaName.setVisible(false);
         arenaHand.setVisible(false);
         field.setArenaRows(-1, 0, 0, 0);
@@ -897,6 +889,7 @@ public class VPlayerPanel extends FContainer {
         } else if (zoneType == ZoneType.Command) {
             commandTab.update();
             onCommandZoneUpdated();
+            updateArenaHand(); //the commander waiting there sits beside the hand
         } else {
             if (zoneTabs.containsKey(zoneType)) {
                 zoneTabs.get(zoneType).update();
@@ -908,6 +901,14 @@ public class VPlayerPanel extends FContainer {
                 case Graveyard, Library, Exile, Stack -> zoneTabs.get(ZoneType.Flashback).update();
             }
             refreshAltBox();
+        }
+    }
+
+    /** The Arena hand fan again, when what sits beside it (the commander, cards castable from elsewhere) may have changed. */
+    public void updateArenaHand() {
+        final InfoTab hand = zoneTabs.get(ZoneType.Hand);
+        if (hand != null && hand.getDisplayArea() instanceof VZoneDisplay zone && zone.isArenaHand()) {
+            hand.update();
         }
     }
 

@@ -1,5 +1,8 @@
 package forge.screens.match.arena;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.utils.Align;
@@ -10,10 +13,13 @@ import forge.Graphics;
 import forge.assets.FImage;
 import forge.assets.FImageComplex;
 import forge.assets.FSkinFont;
+import forge.assets.FSkinImage;
 import forge.assets.TextRenderer;
 import forge.card.CardFaceSymbols;
 import forge.card.CardRenderer;
 import forge.card.CardRenderer.CardStackPosition;
+import forge.card.mana.ManaCost;
+import forge.card.mana.ManaCostShard;
 import forge.game.GameEntityView;
 import forge.game.GameView;
 import forge.game.card.CardView;
@@ -21,7 +27,9 @@ import forge.game.card.CardView.CardStateView;
 import forge.game.card.CounterType;
 import forge.game.combat.CombatView;
 import forge.game.phase.PhaseType;
+import forge.game.keyword.Keyword;
 import forge.game.player.PlayerView;
+import forge.game.zone.ZoneType;
 import forge.game.spellability.StackItemView;
 import forge.item.PaperCard;
 import forge.localinstance.properties.ForgePreferences.FPref;
@@ -120,11 +128,16 @@ public final class ArenaCards {
         public boolean raised;
         /** Set by the hand fan: the card's own height (the panel below it is the strip it rose from). */
         public float cardHeight;
+        /** Set by the hand fan: how much of the card the next one leaves uncovered, which its cost lines up with. */
+        public float costWidth;
         /** Where the pointer is over the raised hand card (0..1 across and down it): the card tilts towards it. */
         public float pointerU = 0.5f, pointerV = 0.5f;
         final ArenaMotion.Spring tiltX = new ArenaMotion.Spring(0f, 60, 0.05f), tiltY = new ArenaMotion.Spring(0f, 60, 0.05f);
         private com.badlogic.gdx.graphics.Texture faceTexture;
         private TextureRegion faceRegion;
+        // the hand card's cost as the pips' image keys, in the order they are drawn, made again when the cost changes
+        private ManaCost costFor;
+        private String[] costKeys;
         /** Set by a battlefield row: drawn this much larger (a fighter) and this many cards stand in its stack. */
         public float scale = 1f;
         public int groupCount;
@@ -433,6 +446,11 @@ public final class ArenaCards {
         if (st.groupCount > 1) {
             final float d = Math.max(ArenaTheme.px(16), Math.round(h * 0.2f));
             ArenaArt.countBadge(g, "×" + st.groupCount, x + w - d * 0.35f, y + d * 0.35f, d);
+        }
+
+        // summoning sick (and no haste): "Zz" on a small plate sitting on the top edge
+        if (known && !st.stackBack && card.isSick() && !state.hasKeyword(Keyword.HASTE)) {
+            drawSleep(g, x + w / 2f, y, h);
         }
 
         if (isSidelined(card)) {
@@ -819,9 +837,114 @@ public final class ArenaCards {
                 g.drawSmoothRoundRect(1f, ArenaTheme.alpha(ArenaTheme.WHITE, 0.25f, S1), x, y, w, h, radius);
             }
         }
+        drawHandCost(g, card, st, x, y, w);
+        drawZoneBadge(g, card, x, y, w);
         if (turned) {
             g.endTransform();
         }
+    }
+
+    /**
+     * The cost of a hand card as mana pips sitting on its top edge (Swing CardPanel.drawArenaCostRow): the next
+     * card covers the printed one, so the pips line up with the right of the part it leaves showing.
+     */
+    private static void drawHandCost(final Graphics g, final CardView card, final State st, final float x, final float y, final float w) {
+        if (!MatchController.instance.mayView(card) || card.isFaceDown()) {
+            return;
+        }
+        final ManaCost cost = card.getCurrentState().getManaCost();
+        if (cost == null || cost.isNoCost() || cost.getGlyphCount() == 0) {
+            return;
+        }
+        final float size = Math.round(Math.max(ArenaTheme.px(14), w * 0.14f));
+        final float shown = st.raised || st.costWidth <= 0f ? w : Math.min(w, st.costWidth);
+        if (cost != st.costFor || st.costKeys == null) {
+            st.costFor = cost;
+            st.costKeys = pipKeys(cost);
+        }
+        final String[] keys = st.costKeys;
+        final float costW = keys.length * size;
+        final float px = x + Math.max(2f, shown - costW - Math.round(w * 0.03f));
+        final float py = y - Math.round(size * 0.45f);
+        for (int i = 0; i < keys.length; i++) { // indexed: drawing a ManaCost itself makes iterators every frame
+            CardFaceSymbols.drawSymbol(keys[i], g, px + i * size, py, size, size);
+        }
+    }
+
+    /** A cost's pips as symbol image keys in CardFaceSymbols.drawManaCost's order: X, then the generic part, then the rest. */
+    private static String[] pipKeys(final ManaCost cost) {
+        final List<String> keys = new ArrayList<>();
+        final int generic = cost.getGenericCost();
+        if (generic > 0 || cost.isPureGeneric()) {
+            for (final ManaCostShard s : cost) {
+                if (s == ManaCostShard.X) {
+                    keys.add(s.getImageKey());
+                }
+            }
+            keys.add(String.valueOf(generic));
+            for (final ManaCostShard s : cost) {
+                if (s != ManaCostShard.X) {
+                    keys.add(s.getImageKey());
+                }
+            }
+        } else {
+            for (final ManaCostShard s : cost) {
+                keys.add(s.getImageKey());
+            }
+        }
+        return keys.toArray(new String[0]);
+    }
+
+    private static final Color BADGE_FILL = ArenaTheme.rgba(6, 6, 8, 240);
+    private static final Color SLEEP_INK = ArenaTheme.rgb(0xCFE3FF);
+
+    /**
+     * A creature that cannot attack or tap yet this turn: "Zz" on a dark plate centred on {@code cx}, sitting on the tile's
+     * top edge at {@code top} (mostly above it, clear of the name), sized from the tile's height.
+     */
+    private static void drawSleep(final Graphics g, final float cx, final float top, final float tileH) {
+        final float ph = Math.max(ArenaTheme.px(14), Math.round(tileH * 0.16f)), pw = Math.round(ph * 1.7f);
+        final float px = cx - pw / 2f, py = top - ph * 0.7f;
+        g.drawSoftShadow(ArenaTheme.alpha(ArenaTheme.BLACK, 0.5f, S1), px, py + ArenaTheme.px(1), pw, ph, ph / 2f, ArenaTheme.px(4));
+        g.fillSmoothRoundRect(CHIP, px, py, pw, ph, ph / 2f);
+        g.drawSmoothRoundRect(1f, CHIP_EDGE, px, py, pw, ph, ph / 2f);
+        // a large Z and a small one, a little higher, as sleep is drawn
+        final FSkinFont big = evenFont(ph * 0.8f), small = evenFont(ph * 0.55f);
+        final float bigW = ArenaArt.cachedTextWidth("Z", big), smallW = ArenaArt.cachedTextWidth("z", small);
+        final float gx = cx - (bigW + smallW) / 2f;
+        ArenaArt.textBold(g, "Z", big, SLEEP_INK, gx, py, bigW + 2f, ph, Align.left);
+        ArenaArt.textBold(g, "z", small, SLEEP_INK, gx + bigW, py - ph * 0.12f, smallW + 2f, ph, Align.left);
+    }
+
+    /**
+     * A card beside the hand that is not in it (the commander, a card castable from the graveyard or exile) wears the
+     * icon of the zone it would be cast from on its left edge (Swing CardPanel.drawArenaCostRow).
+     */
+    private static void drawZoneBadge(final Graphics g, final CardView card, final float x, final float y, final float w) {
+        final FSkinImage icon = zoneIcon(card.getZone());
+        if (icon == null) {
+            return;
+        }
+        final float d = Math.round(Math.max(ArenaTheme.px(14), w * 0.14f)) + ArenaTheme.px(8);
+        final float cx = x - d * 2f / 3f + d / 2f, cy = y + d * 1.75f; //below the cost of the card it overlaps
+        g.fillSmoothCircle(BADGE_FILL, cx, cy, d / 2f);
+        g.drawSmoothCircle(Math.max(1f, ArenaTheme.px(1.2f)), ArenaTheme.GOLD, cx, cy, d / 2f);
+        final float in = d * 0.2f;
+        g.drawImage(icon, cx - d / 2f + in, cy - d / 2f + in, d - 2 * in, d - 2 * in);
+    }
+
+    private static FSkinImage zoneIcon(final ZoneType zone) {
+        if (zone == null) {
+            return null;
+        }
+        return switch (zone) {
+            case Graveyard -> FSkinImage.HDGRAVEYARD;
+            case Exile -> FSkinImage.HDEXILE;
+            case Library -> FSkinImage.HDLIBRARY;
+            case Command -> FSkinImage.COMMAND;
+            case Flashback -> FSkinImage.HDFLASHBACK;
+            default -> null;
+        };
     }
 
     /** The soft shadow a whole card casts down and to the left (Swing Sprite: 3.9% of its height, moved by 40% of that). */

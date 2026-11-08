@@ -1,5 +1,6 @@
 package forge.screens.match.arena;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -16,6 +17,7 @@ import forge.game.GameView;
 import forge.game.card.CardView;
 import forge.game.combat.CombatView;
 import forge.game.player.PlayerView;
+import forge.game.zone.ZoneType;
 import forge.gamemodes.match.Selection;
 import forge.screens.match.MatchController;
 import forge.screens.match.MatchScreen;
@@ -55,6 +57,8 @@ public final class ArenaBoard {
             SEAT_BACK_Y = 0.1f, SEAT_FRONT_Y = 0.205f;
     /** Space between tiles, as a share of a tile's width; stacked copies show this much of each. */
     public static final float TILE_GAP = 0.085f, STACK_STEP = 0.1f;
+    /** A stack of tokens shows at most this many edges behind its front card; its count badge says the rest. */
+    public static final int TOKEN_PEEK = 2;
 
     // ---- the hand fan (CardArea.doFanLayout) ------------------------------------------------------------------------
     /** The local hand's strip: from this share of the window's height down, between these shares of its width. */
@@ -65,6 +69,46 @@ public final class ArenaBoard {
     public static final float FAN_LEAN = 2.2f, FAN_MAX_LEAN = 9f;
     /** How much a hovered hand card grows besides rising. */
     public static final float FAN_HOVER_GROWTH = 0.06f;
+    /** Space between the hand and the cards castable from elsewhere, and their spacing (shares of a card's width). */
+    public static final float FAN_EXTRAS_GAP = 0.42f, FAN_EXTRAS_STEP = 0.62f;
+    private static final ZoneType[] CASTABLE_FROM = {ZoneType.Command, ZoneType.Graveyard, ZoneType.Exile, ZoneType.Library};
+
+    /**
+     * What follows the local hand on its right (Swing CHand.getArenaCastables): the player's commanders while they wait
+     * in the command zone, then every other card outside the hand the prompt offers to play now (flashback, cards exiled
+     * to be played, a companion...), from any player's zones.
+     */
+    public static List<CardView> handCastables(final PlayerView player, final List<CardView> hand) {
+        final List<CardView> extras = new ArrayList<>();
+        // read from the command zone itself: the list of commanders can hold a view of the card from before it last
+        // changed zones; views are equal by card id, so the list still says which cards are commanders
+        final FCollectionView<CardView> command = player.getCards(ZoneType.Command);
+        if (player.getCommanders() != null && command != null) {
+            for (final CardView card : command) {
+                if (player.getCommanders().contains(card) && !extras.contains(card)) {
+                    extras.add(card);
+                }
+            }
+        }
+        // the prompt's short list of actionable cards, not the zones: a Commander library is 99 cards
+        final List<CardView> actionable = MatchController.instance.getSelection().actionable();
+        for (int i = 0, n = actionable.size(); i < n; i++) {
+            final CardView card = actionable.get(i);
+            if (isCastableFrom(card.getZone()) && !hand.contains(card) && !extras.contains(card)) {
+                extras.add(card);
+            }
+        }
+        return extras;
+    }
+
+    private static boolean isCastableFrom(final ZoneType zone) {
+        for (final ZoneType z : CASTABLE_FROM) {
+            if (z == zone) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     // ---- window ----------------------------------------------------------------------------------------------------
     public static float windowW() {
@@ -436,8 +480,59 @@ public final class ArenaBoard {
     // ---- rows ------------------------------------------------------------------------------------------------------
     /** The front row's tile height before a crowded row shrinks it. */
     public static float frontTileHeight(final boolean local, final boolean seat) {
+        return Math.round(fullFrontTileHeight(local, seat) * cardScale());
+    }
+
+    /** {@link #frontTileHeight} at full card size: the room the row has, which smaller tiles sit in the middle of. */
+    public static float fullFrontTileHeight(final boolean local, final boolean seat) {
         final float share = seat ? TILE_H_SEAT : local ? TILE_H : TILE_H * FOE_FRONT;
         return Math.round(windowH() * share);
+    }
+
+    // ---- card size (the slider under the corner buttons) -----------------------------------------------------------
+    /** The smallest the card size slider makes the cards, against their full size. */
+    public static final float CARD_SCALE_MIN = 0.6f;
+    private static float cardScale = -1f;
+    private static int cardScaleSaved = -1;
+
+    /** How large the cards are (battlefield tiles and the hand), from {@link #CARD_SCALE_MIN} to 1; kept in the preferences. */
+    public static float cardScale() {
+        if (cardScale < 0f) {
+            int pct = 100;
+            try {
+                pct = Integer.parseInt(forge.model.FModel.getPreferences().getPref(forge.localinstance.properties.ForgePreferences.FPref.UI_ARENA_CARD_SIZE));
+            } catch (final RuntimeException e) {
+                // not a number, or no preferences yet: full size
+            }
+            cardScale = clampScale(pct / 100f);
+            cardScaleSaved = Math.round(cardScale * 100f);
+        }
+        return cardScale;
+    }
+
+    private static float clampScale(final float s) {
+        return Math.max(CARD_SCALE_MIN, Math.min(1f, Math.round(s * 100f) / 100f));
+    }
+
+    /** Sets the card size (whole percents); returns whether it changed. {@code save} writes it to the preferences now. */
+    public static boolean setCardScale(final float s, final boolean save) {
+        final float v = clampScale(s);
+        final boolean changed = v != cardScale();
+        cardScale = v;
+        if (save) {
+            saveCardScale();
+        }
+        return changed;
+    }
+
+    /** Writes the card size to the preferences, if it changed since last written. */
+    public static void saveCardScale() {
+        final int pct = Math.round(cardScale() * 100f);
+        if (pct != cardScaleSaved) {
+            cardScaleSaved = pct;
+            forge.model.FModel.getPreferences().setPref(forge.localinstance.properties.ForgePreferences.FPref.UI_ARENA_CARD_SIZE, String.valueOf(pct));
+            forge.model.FModel.getPreferences().save();
+        }
     }
 
     /** The back row's tile height for a front row this tall. */
@@ -447,12 +542,12 @@ public final class ArenaBoard {
     }
 
     public static float minTileHeight() {
-        return Math.round(windowH() * TILE_H_MIN);
+        return Math.round(windowH() * TILE_H_MIN * cardScale());
     }
 
     /** The smallest a back row's lands get before they start to overlap. */
     public static float smallestBackHeight() {
-        return Math.round(windowH() * TILE_H * FOE_BACK);
+        return Math.round(windowH() * TILE_H * FOE_BACK * cardScale());
     }
 
     public static float frontRowTop(final boolean local, final boolean seat) {
@@ -506,11 +601,14 @@ public final class ArenaBoard {
         if (seat) {
             final float d = portraitDiameter(true);
             final float zonesX = fieldX + fieldW / 2 + Math.round(d * 0.7f);
-            final float reserve = fieldX + fieldW >= w - 4 ? Math.max(Math.round(h * 0.075f), Math.round(w * 0.06f)) : 14;
+            final float reserve = fieldX + fieldW >= w - 4
+                    ? Math.max(Math.max(Math.round(h * 0.075f), Math.round(w * 0.06f)), ArenaMatchLayout.cornerColumnWidth(h)) : 14;
             return out.set(zonesX, Math.round(h * 0.008f), Math.max(0, fieldX + fieldW - zonesX - reserve), Math.round(h * 0.076f));
         }
         final float zonesH = Math.round(h * 0.118f), zonesW = Math.round(w * 0.15f);
-        final float right = fieldX + fieldW - Math.max(Math.round(h * 0.075f), Math.round(fieldW * 0.06f));
+        // clear of the corner buttons and the card size slider under them, on a narrow window too
+        final float right = fieldX + fieldW - Math.max(Math.max(Math.round(h * 0.075f), Math.round(fieldW * 0.06f)),
+                ArenaMatchLayout.cornerColumnWidth(h));
         return out.set(right - zonesW, Math.round(h * 0.006f), zonesW, zonesH);
     }
 
