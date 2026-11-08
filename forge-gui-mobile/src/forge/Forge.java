@@ -294,9 +294,37 @@ public class Forge implements ApplicationListener {
         if (GuiBase.isAndroid() || deviceAdapter == null || Gdx.graphics == null) {
             return;
         }
-        boolean confine = Gdx.graphics.isFullscreen()
+        boolean confine = isFullscreen()
                 && FModel.getPreferences().getPrefBoolean(FPref.UI_KEEP_MOUSE_IN_FULLSCREEN);
         deviceAdapter.setMouseConfined(confine);
+    }
+
+    /** Whether the window covers its monitor (desktop: borderless fullscreen; elsewhere libGDX's own fullscreen). */
+    public static boolean isFullscreen() {
+        if (deviceAdapter != null && deviceAdapter.hasWindowControls()) {
+            return deviceAdapter.isFullscreen();
+        }
+        return Gdx.graphics != null && Gdx.graphics.isFullscreen();
+    }
+
+    /**
+     * Desktop: switches borderless fullscreen on or off right away (F11, Alt+Enter, the Fullscreen setting) and keeps
+     * the setting in step, so the next start opens the same way.
+     */
+    public static void setFullscreen(boolean fullscreen) {
+        if (deviceAdapter == null || !deviceAdapter.hasWindowControls()) {
+            return;
+        }
+        deviceAdapter.setFullscreen(fullscreen);
+        try {
+            FModel.getPreferences().setPref(FPref.UI_FULLSCREEN_MODE, fullscreen);
+            FModel.getPreferences().save();
+            Config.instance().getSettingData().fullScreen = fullscreen;
+            Config.instance().saveSettings();
+        } catch (RuntimeException e) {
+            e.printStackTrace(); //the window changed anyway; only remembering it failed
+        }
+        updateMouseConfine();
     }
 
     public static boolean hasGamepad() {
@@ -979,6 +1007,7 @@ public class Forge implements ApplicationListener {
         if (isDisposed)
             return;
         ScreenUtil.getInstance().onRenderFrame();
+        lockWindowForAdventure();
         if (showFPS)
             FrameRate.getInstance().update(ImageCache.getInstance().counter, getAssets().manager().getMemoryInMegabytes());
 
@@ -1048,19 +1077,98 @@ public class Forge implements ApplicationListener {
     @Override
     public void resize(int width, int height) {
         try {
-            if (currentScreen != null) {
-                currentScreen.setSize(width, height);
-            } else if (splashScreen != null) {
-                splashScreen.setSize(width, height);
+            if (width <= 0 || height <= 0) {
+                return; //minimized
             }
-            if (currentScene != null)
-                currentScene.resize(width, height);
+            if (deviceAdapter != null && deviceAdapter.hasWindowControls()) {
+                resizeWindow(width, height);
+                if (currentScene != null)
+                    currentScene.fitWindow(width, height);
+            } else {
+                if (currentScreen != null) {
+                    currentScreen.setSize(width, height);
+                } else if (splashScreen != null) {
+                    splashScreen.setSize(width, height);
+                }
+                if (currentScene != null)
+                    currentScene.resize(width, height);
+            }
         } catch (Exception ex) {
             //graphics.end();
             //check if sentry is enabled, if not it will call the gui interface but here we end the graphics so we only send it via sentry..
             if (BugReporter.isSentryEnabled())
                 BugReporter.reportException(ex);
+            else
+                ex.printStackTrace();
         }
+    }
+
+    /**
+     * Desktop: a plain window of this size (leaving fullscreen and maximized), keeping the Fullscreen setting in step.
+     */
+    public static void setWindowSize(int width, int height) {
+        if (deviceAdapter == null || !deviceAdapter.hasWindowControls()) {
+            return;
+        }
+        boolean wasFullscreen = isFullscreen();
+        deviceAdapter.setWindowSize(width, height);
+        if (wasFullscreen) {
+            try {
+                FModel.getPreferences().setPref(FPref.UI_FULLSCREEN_MODE, false);
+                FModel.getPreferences().save();
+                Config.instance().getSettingData().fullScreen = false;
+                Config.instance().saveSettings();
+            } catch (RuntimeException e) {
+                e.printStackTrace();
+            }
+            updateMouseConfine();
+        }
+    }
+
+    private static boolean windowLockedForAdventure;
+
+    /**
+     * Desktop: Adventure's scenes are laid out for the window size they were made at and do not follow a resize, so
+     * the window keeps its size while Adventure runs and can be resized again in the rest of Forge.
+     */
+    private static void lockWindowForAdventure() {
+        if (windowLockedForAdventure != isMobileAdventureMode && deviceAdapter != null && deviceAdapter.hasWindowControls()) {
+            windowLockedForAdventure = isMobileAdventureMode;
+            deviceAdapter.setWindowResizable(!isMobileAdventureMode);
+        }
+    }
+
+    /**
+     * Desktop: the window was resized, maximized or made fullscreen. Everything is laid out again for the new size at
+     * the scale it was given at start-up (text and controls keep their size; there is just more or less room).
+     */
+    private void resizeWindow(int width, int height) {
+        if (width != screenWidth || height != screenHeight) {
+            screenWidth = width;
+            screenHeight = height;
+            camera.viewportWidth = width;
+            camera.viewportHeight = height;
+            camera.position.set(width / 2f, height / 2f, 0);
+            camera.update();
+            ScreenUtil.getInstance().onResize();
+        }
+        if (splashScreen != null) {
+            splashScreen.setSize(width, height);
+        }
+        if (transitionScreen != null) {
+            transitionScreen.setSize(width, height);
+        }
+        if (closingScreen != null) {
+            closingScreen.setSize(width, height);
+        }
+        if (currentScreen != null) {
+            FScreen backdrop = isLandscapeMode() ? currentScreen.getLandscapeBackdropScreen() : null;
+            if (backdrop != null && backdrop != currentScreen) {
+                backdrop.setSize(width, height); //the home screen's menu column, drawn beside the screen
+            }
+            currentScreen.setSize(width, height);
+        }
+        Gdx.graphics.requestRendering();
     }
 
     @Override
@@ -1181,6 +1289,10 @@ public class Forge implements ApplicationListener {
         Adventure.getInstance().sceneWasSwapped = true;
         currentScene = newScene;
 
+        if (deviceAdapter != null && deviceAdapter.hasWindowControls()) {
+            //desktop: a scene made, or last shown, at another window size catches up with this one first
+            currentScene.fitWindow(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+        }
         currentScene.enter();
         if (currentScene instanceof DuelScene)
             Forge.clearTransitionScreen(true);
@@ -1296,6 +1408,13 @@ public class Forge implements ApplicationListener {
             }
             if (keyCode == Keys.SHIFT_LEFT || keyCode == Keys.SHIFT_RIGHT) {
                 shiftKeyDown = true;
+            }
+            //desktop: F11 or Alt+Enter switches fullscreen, wherever Forge is
+            if (deviceAdapter != null && deviceAdapter.hasWindowControls() && !isMobileAdventureMode
+                    && (keyCode == Keys.F11 || ((keyCode == Keys.ENTER || keyCode == Keys.NUMPAD_ENTER)
+                    && (Gdx.input.isKeyPressed(Keys.ALT_LEFT) || Gdx.input.isKeyPressed(Keys.ALT_RIGHT))))) {
+                setFullscreen(!isFullscreen());
+                return true;
             }
 
             if (keyCode == Keys.LEFT || keyCode == Keys.RIGHT || keyCode == Keys.UP || keyCode == Keys.DOWN)
