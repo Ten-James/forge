@@ -9,12 +9,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Color;
+import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.glutils.GLOnlyTextureData;
 import com.badlogic.gdx.graphics.glutils.PixmapTextureData;
 import com.badlogic.gdx.utils.TimeUtils;
 
 import forge.Graphics;
+import forge.gui.GuiBase;
 
 /**
  * The clean 3D board: one calm table seen from above and a little in front, instead of the busy flagstone mat. The
@@ -37,7 +40,7 @@ public final class ArenaTableBoard {
     private ArenaTableBoard() { }
 
     /** The longest side of the baked picture, the shortest, and how large a share of the window it is at most. */
-    private static final int MAX_SIDE = 2560, MIN_SIDE = 320;
+    private static final int MAX_SIDE = 2560, MAX_SIDE_ANDROID = 1280, MIN_SIDE = 320;
     private static final float MAX_SHARE = 0.75f;
     /** How long a size has to hold still before it is baked, and how long a new picture takes to fade in. */
     private static final int SETTLE_MS = 160;
@@ -45,18 +48,18 @@ public final class ArenaTableBoard {
 
     // ---- the table in perspective: the camera looks down at the table; the horizon lies well above the window -------
     /** Where the horizon is, in window heights from the top (negative: above the window), and the grid's cell size. */
-    private static final float HORIZON = -1.0f, CELL = 0.06f;
+    private static final float HORIZON = -1.0f, CELL_X = 0.07f, CELL_Z = 0.03f; // cells wider than tall, as a floor seen at a slant
     /** Where the key light lands on the screen (shares of the window). */
     private static final float LIGHT_X = 0.46f, LIGHT_Y = 0.42f;
-    /** The carved ring in the middle of the table, as a distance on the table plane, and where its middle lies in depth. */
-    private static final float RING_R = 0.2f, RING_Z = 0.704f;
+    /** The carved ring in the middle of the table: a flat ellipse on the screen, in window heights, around the board's medallion. */
+    private static final float RING_X = 0.2f, RING_Y = 0.085f, RING_AT = 0.42f;
     /** The seam between the halves (the board's field split), and how wide the aspect has to be for the side lights to be at full strength. */
     private static final float SEAM = ArenaTheme.FIELD_SPLIT;
 
     /** One mood: the felt in the dark and under the light, the haze, the grid lines, the light, the cool and warm halves. */
     private static final class Mood {
         final int[] dark, lit, haze, line, light, cool;
-        final Color hazeColor, litColor;
+        final Color fallbackTop, fallbackBottom;
         final float lightGain;
 
         Mood(final int dark, final int lit, final int haze, final int line, final int light, final int cool, final float lightGain) {
@@ -67,8 +70,18 @@ public final class ArenaTableBoard {
             this.light = split(light);
             this.cool = split(cool);
             this.lightGain = lightGain;
-            this.hazeColor = ArenaTheme.rgb(haze);
-            this.litColor = ArenaTheme.rgb(lit);
+            // what stands in until the picture exists: about the tone the picture has at its top and at its bottom
+            this.fallbackTop = ArenaTheme.rgb(blend(dark, haze, 0.3f));
+            this.fallbackBottom = ArenaTheme.rgb(blend(dark, lit, 0.35f));
+        }
+
+        private static int blend(final int a, final int b, final float k) {
+            int out = 0;
+            for (int shift = 16; shift >= 0; shift -= 8) {
+                final int ca = (a >> shift) & 0xFF, cb = (b >> shift) & 0xFF;
+                out |= Math.round(ca + (cb - ca) * k) << shift;
+            }
+            return out;
         }
 
         private static int[] split(final int hex) {
@@ -144,7 +157,7 @@ public final class ArenaTableBoard {
 
     /** Whether a picture (or the making of one) is held, so that the match screen can let go of it when it is not wanted. */
     public static boolean isLoaded() {
-        return texture != null || job != null;
+        return texture != null || job != null || upload != null;
     }
 
     /** Draws the table over {@code x, y, w, h} (the match screen's area). Render thread. */
@@ -163,12 +176,15 @@ public final class ArenaTableBoard {
             job.cancel(); // what it is making is not what is wanted now
             job = null;
         }
+        if (upload != null) {
+            stepUpload();
+        }
         if (job != null && job.state.get() == DONE) {
-            swapIn(job);
+            beginUpload(job);
             job = null;
         }
         final boolean stale = texture == null || variant != shownMood || SIZE[0] != shownW || SIZE[1] != shownH;
-        if (stale && job == null && settled) {
+        if (stale && job == null && upload == null && settled) {
             job = new Job(SIZE[0], SIZE[1], variant, w / h);
             if (worker == null) {
                 worker = Executors.newSingleThreadExecutor(r -> {
@@ -202,20 +218,75 @@ public final class ArenaTableBoard {
     /** A plain gradient of the mood, for while the first picture is being made. */
     private static void drawFallback(final Graphics g, final float x, final float y, final float w, final float h, final ArenaTheme.BoardVariant variant) {
         final Mood m = MOODS.get(variant);
-        g.fillGradientRect(m.hazeColor, m.litColor, true, x, y, w, h);
+        g.fillGradientRect(m.fallbackTop, m.fallbackBottom, true, x, y, w, h);
     }
 
-    /** A finished picture becomes the one on the screen, fading in over the one that was there. */
-    private static void swapIn(final Job j) {
+    /** A picture being sent to the GPU in strips, a little each frame (desktop). */
+    private static final class Upload {
+        final Job job;
+        final Texture tex;
+        int row;
+
+        Upload(final Job job, final Texture tex) {
+            this.job = job;
+            this.tex = tex;
+        }
+    }
+
+    private static Upload upload;
+    /** About how much of a picture is sent per frame, in bytes. */
+    private static final int STRIP_BYTES = 1_500_000;
+
+    /**
+     * A finished picture is sent to the GPU. On Android in one go, as a managed texture whose pixmap is kept (a lost GL
+     * context brings it back); on the desktop an empty texture is made and filled strip by strip over a few frames, and
+     * the pixmap is let go afterwards, so a picture costs no frame much and no memory beyond the texture.
+     */
+    private static void beginUpload(final Job j) {
+        if (GuiBase.isAndroid()) {
+            final Texture t = new Texture(new PixmapTextureData(j.pixmap, null, false, false, true));
+            t.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
+            swapIn(t, j.pixmap, j);
+            return;
+        }
+        final Texture t = new Texture(new GLOnlyTextureData(j.w, j.h, 0, GL20.GL_RGBA, GL20.GL_RGBA, GL20.GL_UNSIGNED_BYTE));
+        t.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
+        upload = new Upload(j, t);
+    }
+
+    private static void stepUpload() {
+        final Upload u = upload;
+        final int rows = Math.max(16, STRIP_BYTES / (u.job.w * 4));
+        final int n = Math.min(rows, u.job.h - u.row);
+        final ByteBuffer pixels = u.job.pixmap.getPixels();
+        pixels.position(u.row * u.job.w * 4);
+        u.tex.bind();
+        Gdx.gl.glPixelStorei(GL20.GL_UNPACK_ALIGNMENT, 1);
+        Gdx.gl.glTexSubImage2D(GL20.GL_TEXTURE_2D, 0, 0, u.row, u.job.w, n, GL20.GL_RGBA, GL20.GL_UNSIGNED_BYTE, pixels);
+        u.row += n;
+        if (u.row >= u.job.h) {
+            upload = null;
+            u.job.pixmap.dispose();
+            swapIn(u.tex, null, u.job);
+        } else {
+            ArenaMotion.requestFrame();
+        }
+    }
+
+    /** A picture that is ready becomes the one on the screen, fading in over the one that was there (at once with reduce motion). */
+    private static void swapIn(final Texture tex, final Pixmap keep, final Job j) {
         endFade(); // a fade still running is cut short: its old picture goes
         fadeFrom = texture;
         fadePixmap = pixmap;
-        pixmap = j.pixmap;
-        texture = new Texture(new PixmapTextureData(pixmap, null, false, false, true)); // managed: kept pixmap, rebuilt after a lost GL context
-        texture.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
+        pixmap = keep;
+        texture = tex;
         shownMood = j.mood;
         shownW = j.w;
         shownH = j.h;
+        if (!ArenaTheme.isEffectsOn()) {
+            endFade();
+            return;
+        }
         fade = 0f;
         fadeTween = ArenaMotion.play(FADE_MS, ArenaMotion.LINEAR, t -> fade = t, ArenaTableBoard::endFade);
     }
@@ -242,6 +313,11 @@ public final class ArenaTableBoard {
             job.cancel();
             job = null;
         }
+        if (upload != null) {
+            upload.tex.dispose();
+            upload.job.pixmap.dispose();
+            upload = null;
+        }
         endFade();
         if (texture != null) {
             texture.dispose();
@@ -256,8 +332,11 @@ public final class ArenaTableBoard {
         seenW = seenH = -1;
     }
 
+    /** The size to bake at: three quarters of the window in real pixels (the back buffer's, so HiDPI stays sharp), within the limit. */
     private static void sizeFor(final float w, final float h) {
-        final float scale = Math.min(MAX_SHARE, MAX_SIDE / Math.max(w, h));
+        final float density = Gdx.graphics == null ? 1f : Math.max(1f, Gdx.graphics.getBackBufferWidth() / (float) Math.max(1, Gdx.graphics.getWidth()));
+        final float limit = GuiBase.isAndroid() ? MAX_SIDE_ANDROID : MAX_SIDE;
+        final float scale = Math.min(MAX_SHARE * density, limit / Math.max(w, h));
         SIZE[0] = Math.max(MIN_SIDE / 2, Math.round(w * scale));
         SIZE[1] = Math.max(MIN_SIDE / 2, Math.round(h * scale));
     }
@@ -294,8 +373,8 @@ public final class ArenaTableBoard {
         final float haze = 1f - smooth(0f, 0.3f, v);
         final float zPerPx = z * z * invH;             // depth covered by one pixel step down
         final float xPerPx = z * invH;                 // distance across the table covered by one pixel step across
-        final float zCell = z / CELL;
-        final float rowLine = coverage(Math.abs(zCell - Math.round(zCell)) * CELL / zPerPx, 1.15f);
+        final float zCell = z / CELL_Z;
+        final float rowLine = coverage(Math.abs(zCell - Math.round(zCell)) * CELL_Z / zPerPx, 1.15f);
         // the halves: the opponent's cooler, yours warmer, and a lit seam where they meet
         final float cool = v < SEAM ? 0.07f : 0f, warm = v < SEAM ? 0f : 0.05f;
         final float seamD = (v - SEAM) / 0.0045f;
@@ -331,18 +410,16 @@ public final class ArenaTableBoard {
             gr = mixTo(gr, m.light[1], warm);
             b = mixTo(b, m.light[2], warm);
             // the grid: columns converge on the horizon, rows crowd together; fine, fading with distance
-            final float xCell = tx / CELL;
-            final float colDist = Math.abs(xCell - Math.round(xCell)) * CELL / xPerPx;
+            final float xCell = tx / CELL_X;
+            final float colDist = Math.abs(xCell - Math.round(xCell)) * CELL_X / xPerPx;
             final float cover = Math.max(rowLine, coverage(colDist, 1.0f));
             final float line = cover * (0.05f + 0.08f * lit) * (0.45f + 0.55f * (1f - haze));
             r = mixTo(r, m.line[0], line);
             gr = mixTo(gr, m.line[1], line);
             b = mixTo(b, m.line[2], line);
             // the carved ring in the middle of the table: a ring on the table plane is an ellipse on the screen
-            final float rdz = z - RING_Z;
-            final float ringDist = Math.max(1e-4f, (float) Math.sqrt(tx * tx + rdz * rdz));
-            final float gx = tx / ringDist * xPerPx, gz = rdz / ringDist * zPerPx; // one pixel's step along the ring's normal
-            final float ringPx = Math.abs(ringDist - RING_R) / Math.max(1e-5f, (float) Math.sqrt(gx * gx + gz * gz));
+            final float rex = u / RING_X, rey = (v - RING_AT) / RING_Y;
+            final float ringPx = Math.abs((float) Math.sqrt(rex * rex + rey * rey) - 1f) * RING_Y / invH * 0.9f;
             final float ring = coverage(ringPx, 2.2f) * 0.10f * (0.3f + lit);
             // the light itself warms the lit part, the flanks and the seam a little
             final float glow = Math.min(0.6f, ring + lit * m.lightGain * 0.35f + flank * 0.22f + seam * 0.30f + seamGlow * 0.05f);

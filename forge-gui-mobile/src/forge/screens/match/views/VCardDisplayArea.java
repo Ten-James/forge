@@ -1050,6 +1050,9 @@ public abstract class VCardDisplayArea extends VDisplayArea implements ActivateH
             if (count > 1) //prevent double choice lists or activate handle
                 return false;
             if (renderedCardContains(x, y)) {
+                if (ArenaDrawFlights.reveal(getCard())) {
+                    return true; //a drawn card still flying in: the touch only shows it in its slot
+                }
                 //must invoke in game thread in case a dialog needs to be shown
                 ThreadUtil.invokeInGameThread(() -> {
                     if (GuiBase.getInterface().isRunningOnDesktop() && Forge.mouseButtonID == Input.Buttons.RIGHT) {
@@ -1068,6 +1071,9 @@ public abstract class VCardDisplayArea extends VDisplayArea implements ActivateH
         @Override
         public boolean flick(float x, float y) {
             if (renderedCardContains(x, y)) {
+                if (ArenaDrawFlights.reveal(getCard())) {
+                    return true;
+                }
                 //must invoke in game thread in case a dialog needs to be shown
                 ThreadUtil.invokeInGameThread(() -> selectCard(true));
                 return true;

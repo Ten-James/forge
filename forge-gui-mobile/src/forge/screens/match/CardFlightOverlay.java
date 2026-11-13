@@ -385,10 +385,11 @@ public final class CardFlightOverlay {
 
     private static void drawEnterArena(Graphics g, Flight f, float t) {
         final forge.screens.match.views.VCardDisplayArea.CardAreaPanel panel = forge.screens.match.views.VCardDisplayArea.CardAreaPanel.peek(f.card);
-        if (!f.rippled && t >= (f.style == Style.POPUP ? 0.5f : 0.75f)) { //it has landed: a ring of light spreads from the tile
+        if (!f.rippled && t >= (f.style == Style.POPUP ? 0.55f : 0.92f)) { //it has touched down: a ring of light spreads from the tile
             f.rippled = true;
-            forge.screens.match.arena.ArenaFx.ripple(f.to.x + f.to.width / 2f, f.to.y + f.to.height / 2f, Math.max(f.to.width, f.to.height) * 0.85f,
-                    forge.screens.match.arena.ArenaFx.colorOf(f.card, new Color()));
+            final boolean small = f.card.isToken() || f.card.getCurrentState().isLand(); //a swarm of tokens and a land drop get a small, shared ring
+            forge.screens.match.arena.ArenaFx.landingRing(f.to.x + f.to.width / 2f, f.to.y + f.to.height / 2f,
+                    Math.max(f.to.width, f.to.height) * (small ? 0.55f : 0.85f), forge.screens.match.arena.ArenaFx.colorOf(f.card, new Color()));
         }
         if (f.style == Style.POPUP) { //a token: it appears in place, growing with a small overshoot
             final float e = Interpolation.swingOut.apply(t);

@@ -674,7 +674,9 @@ public class VStack extends FDropDown {
 
         @Override
         public boolean tap(float x, float y, int count) {
-            ArenaStackFx.finish(stackInstance); //a touch on an entry that is still flying in puts it in its place
+            if (ArenaStackFx.reveal(stackInstance)) {
+                return true; //an entry still flying in: the touch only shows it in its place
+            }
             if (isSelectableTarget()) { // a stack target is being chosen: tapping the entry picks (or unpicks) it
                 activeStackInstance = stackInstance;
                 //must invoke in game thread in case a dialog needs to be shown

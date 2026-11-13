@@ -994,6 +994,7 @@ public class MatchScreen extends FScreen {
             ArenaPlayerInfo.drawEliminated(g, game, cornerMenu.getRight(), cardSizeSlider.getBottom() + ArenaMatchLayout.cornerGap(), outH);
         }
         drawArcs(g);
+        forge.screens.match.arena.ArenaArcs.drawFading(g);
         CardFlightOverlay.draw(g, bottomPlayerPanel.getPlayer(), getHeight());
         ArenaFx.draw(g);
         if (arenaLaidOut && isArenaBoard() && bottomPlayerPrompt.isVisible() && arenaPromptMode != null) {

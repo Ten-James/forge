@@ -201,26 +201,34 @@ public final class ArenaCards {
             }
         }
 
-        void noticeStats(final String stats, final int damage) {
+        void noticeStats(final String stats, final int damage, final int holdMs) {
             if (statsSeen != null && stats != null && !stats.equals(statsSeen)) {
                 statsPop.set(1f);
                 statsPop.to(0f, 420);
             }
             statsSeen = stats;
-            if (damageSeen >= 0 && damage > damageSeen) {
-                if (ArenaTheme.isEffectsOn()) { // reduce motion keeps the number that floats off, not the flash and the jolt
-                    hitFlash.set(1f);
-                    hitFlash.to(0f, 380);
-                    if (shakeTween != null) {
-                        shakeTween.cancel();
-                    }
-                    shakeTween = ArenaMotion.play(300, ArenaMotion.LINEAR, t -> shake = (float) Math.sin(t * Math.PI * 5d) * (1f - t), () -> shake = 0f);
+            if (damageSeen >= 0 && damage > damageSeen && ArenaTheme.isEffectsOn()) { // reduce motion: no flash, jolt or number
+                final int amount = damage - damageSeen;
+                if (holdMs > 0) { // an instant or sorcery is on its way to it: the hit shows when the bolt gets there
+                    ArenaMotion.play(holdMs, ArenaMotion.LINEAR, null, () -> hit(amount));
+                } else {
+                    hit(amount);
                 }
-                hitText = "-" + (damage - damageSeen);
-                hitFloat.set(0f);
-                hitFloat.to(1f, 1000, 0, ArenaMotion.LINEAR, null);
             }
             damageSeen = damage;
+        }
+
+        /** The red flash, the jolt and the number that floats off it when it is hurt. */
+        private void hit(final int amount) {
+            hitFlash.set(1f);
+            hitFlash.to(0f, 380);
+            if (shakeTween != null) {
+                shakeTween.cancel();
+            }
+            shakeTween = ArenaMotion.play(300, ArenaMotion.LINEAR, t -> shake = (float) Math.sin(t * Math.PI * 5d) * (1f - t), () -> shake = 0f);
+            hitText = "-" + amount;
+            hitFloat.set(0f);
+            hitFloat.to(1f, 1000, 0, ArenaMotion.LINEAR, null);
         }
 
         /** Forgets what it showed: the next frame shows the card as it is, without animating to it. */
@@ -342,7 +350,7 @@ public final class ArenaCards {
         final int glow = glowFor(card, hovered, false);
         st.noticeGlow(glow);
         final String stats = tileStats(card, known, st);
-        st.noticeStats(stats, card.getDamage());
+        st.noticeStats(stats, card.getDamage(), ArenaStackFx.holdMs(card));
         if (st.lift.goal() != (hovered ? 1f : 0f)) {
             st.lift.to(hovered ? 1f : 0f, hovered ? 110 : 170);
         }

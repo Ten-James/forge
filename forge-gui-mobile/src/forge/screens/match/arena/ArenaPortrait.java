@@ -34,7 +34,7 @@ public final class ArenaPortrait implements ArenaSkin<VAvatar> {
         final ArenaMotion.Fade ringMix = new ArenaMotion.Fade(1f);
         int ring = -1, ringWas = -1;
         int lifeSeen = Integer.MIN_VALUE, lifeShown;
-        ArenaMotion.Tween lifeRoll;
+        ArenaMotion.Tween lifeRoll, lifeHold;
         final ArenaMotion.Fade lifePop = new ArenaMotion.Fade(0f), lifeFlash = new ArenaMotion.Fade(0f), floatUp = new ArenaMotion.Fade(1f);
         boolean flashLost;
         String floatText;
@@ -104,7 +104,7 @@ public final class ArenaPortrait implements ArenaSkin<VAvatar> {
         }
 
         // the life total: it counts its way to the new figure, the plate jumps, the ring flashes, the difference floats off
-        noticeLife(st, player.getLife());
+        noticeLife(st, player.getLife(), ArenaStackFx.holdMs(player));
         final float flash = st.lifeFlash.get();
         if (flash > 0f) {
             ArenaArt.portraitRing(g, cx, cy, d, st.flashLost ? LIFE_LOST : LIFE_GAINED, flash);
@@ -182,7 +182,8 @@ public final class ArenaPortrait implements ArenaSkin<VAvatar> {
 
     /** A ring of light running round the portrait while the game waits on this player. */
     private static void drawWaitingRing(final Graphics g, final float cx, final float cy, final float d) {
-        final float t = ArenaMotion.seconds() * 1.4f;
+        final boolean moving = ArenaTheme.isEffectsOn(); // reduce motion: the same ring, still, asking for no frames
+        final float t = moving ? ArenaMotion.seconds() * 1.4f : 0f;
         final float r = d / 2f + Math.max(2f, d * 0.06f);
         final int dots = 12;
         for (int i = 0; i < dots; i++) {
@@ -190,7 +191,9 @@ public final class ArenaPortrait implements ArenaSkin<VAvatar> {
             final float glow = 0.25f + 0.75f * (float) Math.pow(0.5 + 0.5 * Math.cos(i * 2 * Math.PI / dots), 3);
             g.fillSmoothCircle(ArenaTheme.alpha(WAITING, glow, S3), cx + (float) Math.cos(a) * r, cy + (float) Math.sin(a) * r, Math.max(1.5f, d * 0.03f));
         }
-        ArenaMotion.requestFrame();
+        if (moving) {
+            ArenaMotion.requestFrame();
+        }
     }
 
     /** "Click to choose X" (a target, a player to pick); made once per portrait. */
@@ -232,29 +235,33 @@ public final class ArenaPortrait implements ArenaSkin<VAvatar> {
         return false;
     }
 
-    private static void noticeLife(final State st, final int life) {
+    /**
+     * The life total: it counts its way to the new figure, the plate jumps, the ring flashes, the difference floats off.
+     * With reduce motion it just changes. While an instant or sorcery is on its way to this player, all that waits for
+     * its bolt to arrive (the old figure stays up meanwhile).
+     */
+    private static void noticeLife(final State st, final int life, final int holdMs) {
         if (st.lifeSeen != Integer.MIN_VALUE && life != st.lifeSeen) {
             final int delta = life - st.lifeSeen;
-            final int from = st.lifeShown;
-            if (st.lifeRoll != null) {
-                st.lifeRoll.cancel();
+            if (st.lifeHold != null) { // a newer change while one waits: the waiting one happens now, with this
+                st.lifeHold.cancel();
+                st.lifeHold = null;
             }
-            final boolean moving = ArenaTheme.isEffectsOn(); // reduce motion: the figure changes at once, with no pop and no flash of the ring
-            if (moving) {
-                st.lifeRoll = ArenaMotion.play(Math.min(800, 320 + Math.abs(delta) * 40), ArenaMotion.OUT, t -> st.lifeShown = Math.round(ArenaMotion.lerp(from, life, t)));
-                st.lifePop.set(1f);
-                st.lifePop.to(0f, 460);
-                st.lifeFlash.set(1f);
-                st.lifeFlash.to(0f, 560);
-            } else {
-                st.lifeRoll = null;
+            if (!ArenaTheme.isEffectsOn()) {
+                if (st.lifeRoll != null) {
+                    st.lifeRoll.cancel();
+                    st.lifeRoll = null;
+                }
                 st.lifeShown = life;
+            } else if (holdMs > 0) {
+                st.lifeHold = ArenaMotion.play(holdMs, ArenaMotion.LINEAR, null, () -> {
+                    st.lifeHold = null;
+                    startLifeChange(st, life, delta);
+                });
+            } else {
+                startLifeChange(st, life, delta);
             }
-            st.flashLost = delta < 0;
-            st.floatText = (delta > 0 ? "+" : "") + delta;
-            st.floatUp.set(0f);
-            st.floatUp.to(1f, 1100, 0, ArenaMotion.LINEAR, null);
-        } else if (st.lifeRoll == null || st.lifeRoll.isOver()) {
+        } else if (st.lifeHold == null && (st.lifeRoll == null || st.lifeRoll.isOver())) {
             st.lifeShown = life;
         }
         st.lifeSeen = life;
@@ -262,6 +269,22 @@ public final class ArenaPortrait implements ArenaSkin<VAvatar> {
             st.lifeTextFor = st.lifeShown;
             st.lifeText = String.valueOf(st.lifeShown);
         }
+    }
+
+    private static void startLifeChange(final State st, final int life, final int delta) {
+        final int from = st.lifeShown;
+        if (st.lifeRoll != null) {
+            st.lifeRoll.cancel();
+        }
+        st.lifeRoll = ArenaMotion.play(Math.min(800, 320 + Math.abs(delta) * 40), ArenaMotion.OUT, t -> st.lifeShown = Math.round(ArenaMotion.lerp(from, life, t)));
+        st.lifePop.set(1f);
+        st.lifePop.to(0f, 460);
+        st.lifeFlash.set(1f);
+        st.lifeFlash.to(0f, 560);
+        st.flashLost = delta < 0;
+        st.floatText = (delta > 0 ? "+" : "") + delta;
+        st.floatUp.set(0f);
+        st.floatUp.to(1f, 1100, 0, ArenaMotion.LINEAR, null);
     }
 
     /** The steel plinth the portrait sits on: two wings that carry the phase ladder, brass along their edges. */
@@ -340,10 +363,13 @@ public final class ArenaPortrait implements ArenaSkin<VAvatar> {
         final float bx = cx + d / 2f - bw / 3f, by = cy - d / 2f;
         g.fillSmoothRoundRect(BUBBLE, bx, by, bw, bh, bh / 2f);
         final float dot = Math.max(ArenaTheme.px(3), bh / 5f);
+        final boolean moving = ArenaTheme.isEffectsOn(); // reduce motion: three still dots, asking for no frames
         final float beat = ArenaMotion.seconds() * 2f * (float) Math.PI / 0.9f;
-        ArenaMotion.requestFrame();
+        if (moving) {
+            ArenaMotion.requestFrame();
+        }
         for (int i = 0; i < 3; i++) {
-            final float hop = (float) Math.max(0d, Math.sin(beat - i * 0.9d)) * dot * 0.8f;
+            final float hop = moving ? (float) Math.max(0d, Math.sin(beat - i * 0.9d)) * dot * 0.8f : 0f;
             g.fillSmoothCircle(ArenaTheme.WHITE, bx + bw / 2f - dot * 1.5f + i * dot * 1.5f, by + bh / 2f - hop, dot / 2f);
         }
     }

@@ -79,85 +79,133 @@ public final class ArenaArcs {
         return 0f;
     }
 
-    /** One arc from x1, y1 to x2, y2 (the coordinates of the Graphics in use). */
-    public static void draw(final Graphics g, final float x1, final float y1, final float x2, final float y2, final int kind) {
+    /**
+     * The bow of an arc from x1, y1 to x2, y2: where its middle control point is, written to {@code out[0], out[1]}.
+     * Perpendicular to the line, upwards for a mostly level arc, to the left for a mostly upright one. Bolts follow it too.
+     */
+    static void bow(final float x1, final float y1, final float x2, final float y2, final float[] out) {
         final float dx = x2 - x1, dy = y2 - y1;
-        final float len = (float) Math.sqrt(dx * dx + dy * dy);
-        if (len < 2f) {
-            return;
-        }
-        final Color c = COLOR[Math.max(0, Math.min(COLOR.length - 1, kind))];
-        final float grown = drawnIn(x1, y1, x2, y2, kind);
-        final float reach = ArenaMotion.OUT.at(grown); // how much of the way the arc has got
-        if (grown < 1f) {
-            ArenaMotion.requestFrame();
-        }
-        // bow it: perpendicular to the line, upwards for a mostly level arc, to the left for a mostly upright one
+        final float len = Math.max(1f, (float) Math.sqrt(dx * dx + dy * dy));
         float nx = -dy / len, ny = dx / len;
         if (Math.abs(dx) >= Math.abs(dy) ? ny > 0 : nx > 0) {
             nx = -nx;
             ny = -ny;
         }
         final float bow = Math.min(len * 0.22f, ArenaTheme.px(220));
-        final float cx = (x1 + x2) / 2f + nx * bow, cy = (y1 + y2) / 2f + ny * bow;
-        final float glowR = Math.max(4f, ArenaTheme.px(13)), coreR = Math.max(2f, ArenaTheme.px(3.4f)); // a ribbon about px(6) across at its head
-        // the discs overlap well, so the core reads as one line
-        final int n = Math.max(24, Math.min(420, Math.round(len * 1.15f / (coreR * 1.1f))));
-        // a pulse running towards the target, once every 0.9 s
-        final boolean moving = ArenaTheme.isEffectsOn();
-        final float run = moving ? (ArenaMotion.seconds() % 0.9f) / 0.9f : -1f; // reduce motion: no pulse running along the arc
-        if (moving) {
-            ArenaMotion.requestFrame();
-        }
-        final Color glow = ArenaTheme.alpha(c, Math.min(0.5f, 6.5f / n * 2.2f), S1);
-        final int last = Math.min(n, (int) Math.ceil(n * reach));
-        for (int i = 0; i <= last; i++) {
-            final float t = i / (float) n;
-            final float u = 1f - t;
-            final float px = u * u * x1 + 2 * u * t * cx + t * t * x2, py = u * u * y1 + 2 * u * t * cy + t * t * y2;
-            final float taper = 0.3f + 0.7f * (float) Math.pow(t, 0.8d); // a ribbon: thin where it leaves, widening all the way to its head
-            g.drawSoftShadow(glow, px - glowR * 0.25f * taper, py - glowR * 0.25f * taper, glowR * 0.5f * taper, glowR * 0.5f * taper, glowR * 0.25f * taper, glowR * 0.75f * taper);
-        }
-        for (int i = 0; i <= last; i++) {
-            final float t = i / (float) n;
-            final float u = 1f - t;
-            final float px = u * u * x1 + 2 * u * t * cx + t * t * x2, py = u * u * y1 + 2 * u * t * cy + t * t * y2;
-            final float dist = Math.abs(t - run);
-            final float lit = Math.max(0f, 1f - dist / 0.08f);
-            final float taper = 0.3f + 0.7f * (float) Math.pow(t, 0.8d);
-            final float r = coreR * taper * (1f + 0.6f * lit);
-            S2.set(c.r + (1f - c.r) * (0.55f + 0.45f * lit), c.g + (1f - c.g) * (0.55f + 0.45f * lit), c.b + (1f - c.b) * (0.55f + 0.45f * lit), 0.9f);
-            g.fillSmoothCircle(S2, px, py, r);
-        }
-        if (grown < 1f) { // the head still running: a bright bead at the front of the line
-            final float t = Math.min(1f, last / (float) n), u = 1f - t;
-            final float hx = u * u * x1 + 2 * u * t * cx + t * t * x2, hy = u * u * y1 + 2 * u * t * cy + t * t * y2;
-            g.drawGlow(ArenaTheme.alpha(c, 0.8f, S3), hx - coreR * 2f, hy - coreR * 2f, coreR * 4f, coreR * 4f, coreR * 2f, glowR);
-            g.fillSmoothCircle(ArenaTheme.alpha(ArenaTheme.WHITE, 0.95f, S3), hx, hy, coreR * 1.8f);
-        }
-        // the mark where it lands, opening as the line gets there
-        final float arrive = ArenaMotion.OUT.at(ArenaMotion.unlerp(0.7f, 1f, grown));
-        if (arrive <= 0f) {
+        out[0] = (x1 + x2) / 2f + nx * bow;
+        out[1] = (y1 + y2) / 2f + ny * bow;
+    }
+
+    private static final float[] CTRL = new float[2];
+
+    /** One arc from x1, y1 to x2, y2 (the coordinates of the Graphics in use). */
+    public static void draw(final Graphics g, final float x1, final float y1, final float x2, final float y2, final int kind) {
+        final float grown = drawnIn(x1, y1, x2, y2, kind);
+        render(g, x1, y1, x2, y2, kind, grown, 1f);
+    }
+
+    /**
+     * Draws the arcs that were drawn a moment ago and are not any more, fading out (so a removed arrow does not just
+     * vanish). Call once per frame after every arc has been drawn.
+     */
+    public static void drawFading(final Graphics g) {
+        if (!ArenaTheme.isEffectsOn()) {
             return;
         }
-        final float ring = Math.max(4f, ArenaTheme.px(11)) * (0.5f + 0.5f * arrive);
-        g.drawGlow(ArenaTheme.alpha(c, 0.7f * arrive, S3), x2 - ring, y2 - ring, 2 * ring, 2 * ring, ring, ArenaTheme.px(10));
-        g.drawSmoothCircle(Math.max(1.5f, ArenaTheme.px(2.5f)), ArenaTheme.alpha(ArenaTheme.WHITE, 0.92f * arrive, S3), x2, y2, ring);
-        g.fillSmoothCircle(ArenaTheme.alpha(c, 0.95f * arrive, S3), x2, y2, ring * 0.38f);
-        // the arrow head: a big chevron just before the ring, pointing the way the line arrives, with a soft glow under it
-        final float adx = x2 - cx, ady = y2 - cy, alen = (float) Math.sqrt(adx * adx + ady * ady);
-        if (alen > 1f) {
-            final float ux = adx / alen, uy = ady / alen, vx = -uy, vy = ux;
-            final float tipX = x2 - ux * ring * 1.2f, tipY = y2 - uy * ring * 1.2f;
-            final float arm = ring * 2.5f * arrive, spread = arm * 0.66f;
-            final float bx = tipX - ux * arm, by = tipY - uy * arm;
-            final float thick = Math.max(3.5f, ring * 0.62f);
-            final Color head = ArenaTheme.mix(c, ArenaTheme.WHITE, 0.5f, S2);
-            g.drawLine(thick * 2.4f, ArenaTheme.alpha(c, 0.28f * arrive, S3), bx + vx * spread, by + vy * spread, tipX, tipY);
-            g.drawLine(thick * 2.4f, ArenaTheme.alpha(c, 0.28f * arrive, S3), bx - vx * spread, by - vy * spread, tipX, tipY);
-            g.drawLine(thick, ArenaTheme.alpha(head, 0.98f * arrive, S3), bx + vx * spread, by + vy * spread, tipX + ux * thick * 0.4f, tipY + uy * thick * 0.4f);
-            g.drawLine(thick, ArenaTheme.alpha(head, 0.98f * arrive, S3), bx - vx * spread, by - vy * spread, tipX + ux * thick * 0.4f, tipY + uy * thick * 0.4f);
-            g.fillSmoothCircle(ArenaTheme.alpha(head, 0.98f * arrive, S3), tipX, tipY, thick * 0.5f);
+        final long frame = ArenaMotion.frame(), now = System.nanoTime();
+        for (int i = 0; i < MEMORY; i++) {
+            if (LAST[i] == 0L || STAMP[i] == frame) {
+                continue;
+            }
+            final float age = (now - LAST[i]) / (FORGET_MS * 1e6f);
+            if (age < 1f) {
+                render(g, EX1[i], EY1[i], EX2[i], EY2[i], KIND[i], 1f, (1f - age) * (1f - age));
+                ArenaMotion.requestFrame();
+            }
+        }
+    }
+
+    private static void render(final Graphics g, final float x1, final float y1, final float x2, final float y2, final int kind, final float grown,
+            final float fadeAlpha) {
+        final float dx = x2 - x1, dy = y2 - y1;
+        final float len = (float) Math.sqrt(dx * dx + dy * dy);
+        if (len < 2f) {
+            return;
+        }
+        final Color c = COLOR[Math.max(0, Math.min(COLOR.length - 1, kind))];
+        final float reach = ArenaMotion.OUT.at(grown); // how much of the way the arc has got
+        if (grown < 1f) {
+            ArenaMotion.requestFrame();
+        }
+        final float old = g.getfloatAlphaComposite();
+        if (fadeAlpha < 1f) {
+            g.setAlphaComposite(old * fadeAlpha);
+        }
+        try {
+            bow(x1, y1, x2, y2, CTRL);
+            final float cx = CTRL[0], cy = CTRL[1];
+            final float glowR = Math.max(4f, ArenaTheme.px(13)), coreR = Math.max(2f, ArenaTheme.px(3.4f)); // a ribbon about px(6) across at its head
+            final float ring = Math.max(4f, ArenaTheme.px(11));
+            // the ribbon ends where the chevron's point is; the discs overlap well, so the core reads as one line
+            final float end = Math.max(0.3f, 1f - ring * 1.2f / len);
+            final int n = Math.max(20, Math.min(150, Math.round(len * end / (coreR * 1.7f))));
+            // a pulse running towards the target, once every 0.9 s
+            final boolean moving = ArenaTheme.isEffectsOn();
+            final float run = moving ? (ArenaMotion.seconds() % 0.9f) / 0.9f * end : -1f; // reduce motion: no pulse running along the arc
+            if (moving) {
+                ArenaMotion.requestFrame();
+            }
+            final Color glow = ArenaTheme.alpha(c, Math.min(0.5f, 13f / n * 2.2f), S1);
+            final int last = Math.min(n, (int) Math.ceil(n * reach));
+            for (int i = 0; i <= last; i += 2) { // the glow discs overlap even more: every other one is enough
+                final float t = end * i / n;
+                final float u = 1f - t;
+                final float px = u * u * x1 + 2 * u * t * cx + t * t * x2, py = u * u * y1 + 2 * u * t * cy + t * t * y2;
+                final float taper = 0.3f + 0.7f * (float) Math.pow(t, 0.8d); // a ribbon: thin where it leaves, widening all the way to its head
+                g.drawSoftShadow(glow, px - glowR * 0.25f * taper, py - glowR * 0.25f * taper, glowR * 0.5f * taper, glowR * 0.5f * taper, glowR * 0.25f * taper, glowR * 0.75f * taper);
+            }
+            for (int i = 0; i <= last; i++) {
+                final float t = end * i / n;
+                final float u = 1f - t;
+                final float px = u * u * x1 + 2 * u * t * cx + t * t * x2, py = u * u * y1 + 2 * u * t * cy + t * t * y2;
+                final float lit = Math.max(0f, 1f - Math.abs(t - run) / 0.08f);
+                final float taper = 0.3f + 0.7f * (float) Math.pow(t, 0.8d);
+                final float r = coreR * taper * (1f + 0.6f * lit);
+                S2.set(c.r + (1f - c.r) * (0.55f + 0.45f * lit), c.g + (1f - c.g) * (0.55f + 0.45f * lit), c.b + (1f - c.b) * (0.55f + 0.45f * lit), 0.9f);
+                g.fillSmoothCircle(S2, px, py, r);
+            }
+            if (grown < 1f) { // the head still running: a bright bead at the front of the line
+                final float t = end * Math.min(1f, last / (float) n), u = 1f - t;
+                final float hx = u * u * x1 + 2 * u * t * cx + t * t * x2, hy = u * u * y1 + 2 * u * t * cy + t * t * y2;
+                g.drawGlow(ArenaTheme.alpha(c, 0.8f, S3), hx - coreR * 2f, hy - coreR * 2f, coreR * 4f, coreR * 4f, coreR * 2f, glowR);
+                g.fillSmoothCircle(ArenaTheme.alpha(ArenaTheme.WHITE, 0.95f, S3), hx, hy, coreR * 1.8f);
+            }
+            // the mark where it lands, opening as the line gets there
+            final float arrive = ArenaMotion.OUT.at(ArenaMotion.unlerp(0.7f, 1f, grown));
+            if (arrive <= 0f) {
+                return;
+            }
+            final float markR = ring * (0.5f + 0.5f * arrive);
+            g.drawGlow(ArenaTheme.alpha(c, 0.7f * arrive, S3), x2 - markR, y2 - markR, 2 * markR, 2 * markR, markR, ArenaTheme.px(10));
+            g.drawSmoothCircle(Math.max(1.5f, ArenaTheme.px(2.5f)), ArenaTheme.alpha(ArenaTheme.WHITE, 0.92f * arrive, S3), x2, y2, markR);
+            g.fillSmoothCircle(ArenaTheme.alpha(c, 0.95f * arrive, S3), x2, y2, markR * 0.38f);
+            // the arrow head: a big chevron just before the ring, pointing the way the line arrives, with a soft glow under it
+            final float adx = x2 - cx, ady = y2 - cy, alen = (float) Math.sqrt(adx * adx + ady * ady);
+            if (alen > 1f) {
+                final float ux = adx / alen, uy = ady / alen, vx = -uy, vy = ux;
+                final float tipX = x2 - ux * ring * 1.2f, tipY = y2 - uy * ring * 1.2f;
+                final float arm = ring * 2.5f * arrive, spread = arm * 0.66f;
+                final float bx = tipX - ux * arm, by = tipY - uy * arm;
+                final float thick = Math.max(3.5f, ring * 0.62f);
+                final Color head = ArenaTheme.mix(c, ArenaTheme.WHITE, 0.5f, S2);
+                g.drawLine(thick * 2.4f, ArenaTheme.alpha(c, 0.28f * arrive, S3), bx + vx * spread, by + vy * spread, tipX, tipY);
+                g.drawLine(thick * 2.4f, ArenaTheme.alpha(c, 0.28f * arrive, S3), bx - vx * spread, by - vy * spread, tipX, tipY);
+                g.drawLine(thick, ArenaTheme.alpha(head, 0.98f * arrive, S3), bx + vx * spread, by + vy * spread, tipX + ux * thick * 0.4f, tipY + uy * thick * 0.4f);
+                g.drawLine(thick, ArenaTheme.alpha(head, 0.98f * arrive, S3), bx - vx * spread, by - vy * spread, tipX + ux * thick * 0.4f, tipY + uy * thick * 0.4f);
+                g.fillSmoothCircle(ArenaTheme.alpha(head, 0.98f * arrive, S3), tipX, tipY, thick * 0.5f);
+            }
+        } finally {
+            g.setAlphaComposite(old);
         }
     }
 }

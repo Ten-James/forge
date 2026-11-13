@@ -1,12 +1,11 @@
 package forge.screens.match.arena;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.math.Rectangle;
+import com.badlogic.gdx.utils.IntMap;
 
 import forge.Graphics;
 import forge.card.CardRenderer;
@@ -43,23 +42,28 @@ public final class ArenaFx {
     /** The most effects alive at once, and flights among them. A board wipe or a big draw stays readable. */
     public static final int MAX_EFFECTS = 40, MAX_FLIGHTS = 12;
     static final int DRAW_MS = 600, BACK_MS = 520, STACK_MS = 460;
-    private static final int RING_MS = 520, BURST_MS = 640, BOLT_MS = 420, COUNTER_MS = 620;
+    static final int BOLT_MS = 420;
+    private static final int RING_MS = 520, BURST_MS = 640, COUNTER_MS = 700;
+    /** A flight's first part lifts the card off; its travel ends where the crossfade begins, at rest in its slot. */
+    private static final float LIFT_END = 0.10f;
     /** From here on a flight is crossfading into the real thing (the view draws it again, the flight fades out above it). */
     private static final float CROSSFADE_FROM = 0.84f;
-    private static final int SPARKS = 9;
+    /** Flight and bolt times grow and shrink with the way they go, against the window's height, and stay within these bounds. */
+    private static final float SLOWEST = 1.35f, FASTEST = 0.8f;
+    private static final int SPARKS = 9, SHARDS = 10;
 
     private static final Color S1 = new Color(), S2 = new Color(), S3 = new Color();
     private static final Color WARM = ArenaTheme.rgb(0xFFE3A8);
     static final Color COUNTER = ArenaTheme.rgb(0xFF4D5E);
 
     static final int RING = 0, BURST = 1, FLIGHT = 2, BOLT = 3, SHATTER = 4;
-    static final int CAT_DRAW = 0, CAT_BACK = 1, CAT_STACK = 2;
+    static final int CAT_DRAW = 0, CAT_BACK = 1, CAT_STACK = 2, CAT_MOVE = 3;
 
     static final class Fx {
         int kind;
         float t;                // 0..1 plain progress (the tween is linear: drawing eases it)
         float x, y, size;       // a ring or burst: where, how large it grows; a bolt: where it starts
-        float x2, y2;           // a bolt: where it goes
+        float x2, y2, cx, cy;   // a bolt: where it goes and the bow it follows
         final Color color = new Color();
         ArenaMotion.Tween tween;
         // flights
@@ -71,6 +75,7 @@ public final class ArenaFx {
         float lean;             // the lean of the slot it flies into (degrees), settled into as it lands
         float lift = 0.26f;     // how high the arc rises, as a share of the card's height
         float seed;
+        boolean accent;         // a stack flight: its ring of light has been set off
 
         /** Whether the card it stands for must stay hidden (its view draws a ghost): waiting or in the air, not yet crossfading. */
         boolean hidesTarget() {
@@ -79,8 +84,10 @@ public final class ArenaFx {
     }
 
     static final List<Fx> fx = new ArrayList<>();
-    static final Map<Integer, Fx> drawFlights = new HashMap<>();
-    static final Map<Integer, Fx> stackFlights = new HashMap<>();
+    static final IntMap<Fx> drawFlights = new IntMap<>();
+    static final IntMap<Fx> stackFlights = new IntMap<>();
+    private static long lastLanding;
+    private static final float[] BOW = new float[2];
 
     // ---- state -------------------------------------------------------------------------------------------------------
 
@@ -100,17 +107,18 @@ public final class ArenaFx {
         });
     }
 
-    /** Whether anything is on its way now. */
-    public static boolean isShowing() {
-        return !fx.isEmpty();
-    }
-
-    /** Whether effects play: the Arena look is on, in a match, and reduce motion is off. */
+    /** Whether effects play: the Arena layout is in use (not a hotseat game), in a match, and reduce motion is off. */
     static boolean on() {
-        return ArenaTheme.isEffectsOn() && ArenaTheme.isMatchBoard();
+        return ArenaTheme.isEffectsOn() && ArenaMatchLayout.applies() && ArenaTheme.isMatchBoard();
     }
 
-    /** Before the first turn begins nothing is animated: the opening hand and mulligans just appear. */
+    /** Before the first turn begins (the opening hand is dealt there, once; mulligans are not animated). */
+    static boolean beforeFirstTurn() {
+        final GameView game = MatchController.instance == null ? null : MatchController.instance.getGameView();
+        return game != null && game.getTurn() < 1;
+    }
+
+    /** Before the first turn begins nothing is animated: mulligans just appear. */
     static boolean quiet() {
         final GameView game = MatchController.instance == null ? null : MatchController.instance.getGameView();
         return game == null || game.getTurn() < 1;
@@ -128,9 +136,27 @@ public final class ArenaFx {
         timed(BURST, x, y, size, color, BURST_MS);
     }
 
-    /** A countered spell breaking up where it stood. */
+    /**
+     * The ring of a permanent that touched down on the board. Landings that come together (a token swarm, a land and its
+     * trigger) share one: a ring that comes within a moment of the last one is dropped, and a small card's ring is small.
+     */
+    public static void landingRing(final float x, final float y, final float size, final Color color) {
+        final long now = System.nanoTime();
+        if (now - lastLanding < 90_000_000L) {
+            return;
+        }
+        lastLanding = now;
+        timed(RING, x, y, size, color, RING_MS);
+    }
+
+    /** A countered spell breaking up into shards where it stood. */
     static void shatter(final float x, final float y, final float size) {
         timed(SHATTER, x, y, size, COUNTER, COUNTER_MS);
+    }
+
+    /** How long a flight or bolt over {@code dist} takes against a base time: longer for a longer way, within bounds. */
+    static int scaled(final int base, final float dist) {
+        return Math.round(base * Math.max(FASTEST, Math.min(SLOWEST, 0.75f + 0.6f * dist / ArenaBoard.windowH())));
     }
 
     private static Fx timed(final int kind, final float x, final float y, final float size, final Color color, final int millis) {
@@ -162,8 +188,11 @@ public final class ArenaFx {
         e.y2 = ty;
         e.size = size;
         e.color.set(color);
+        ArenaArcs.bow(x, y, tx, ty, BOW);
+        e.cx = BOW[0];
+        e.cy = BOW[1];
         fx.add(e);
-        e.tween = ArenaMotion.play(BOLT_MS, ArenaMotion.LINEAR, t -> e.t = t, () -> {
+        e.tween = ArenaMotion.play(scaled(BOLT_MS, (float) Math.hypot(tx - x, ty - y)), ArenaMotion.LINEAR, t -> e.t = t, () -> {
             fx.remove(e);
             burst(tx, ty, size * 0.8f, e.color);
         });
@@ -186,7 +215,7 @@ public final class ArenaFx {
 
     static Fx fly(final int cat, final int id, final CardView card, final PlayerView owner, final Rectangle from, final Rectangle to,
             final boolean flip, final int millis, final int delayMs) {
-        if (!on() || fx.size() >= MAX_EFFECTS || drawFlights.size() + stackFlights.size() >= MAX_FLIGHTS || from == null || to == null || to.width <= 0) {
+        if (!on() || fx.size() >= MAX_EFFECTS || drawFlights.size + stackFlights.size >= MAX_FLIGHTS || from == null || to == null || to.width <= 0) {
             return null;
         }
         final Fx e = new Fx();
@@ -205,7 +234,14 @@ public final class ArenaFx {
         } else if (cat == CAT_STACK) {
             stackFlights.put(id, e);
         }
-        e.tween = ArenaMotion.play(millis, delayMs, ArenaMotion.LINEAR, t -> e.t = t, () -> land(e));
+        final float dist = (float) Math.hypot(to.x + to.width / 2f - from.x - from.width / 2f, to.y + to.height / 2f - from.y - from.height / 2f);
+        e.tween = ArenaMotion.play(scaled(millis, dist), delayMs, ArenaMotion.LINEAR, t -> {
+            e.t = t;
+            if (e.cat == CAT_STACK && !e.accent && t >= CROSSFADE_FROM) { // it touched down on the stack: its one ring of light
+                e.accent = true;
+                ripple(e.to.x + e.to.width / 2f, e.to.y + e.to.height * 0.7f, Math.max(e.to.width, ArenaTheme.px(60)) * 0.9f, e.color);
+            }
+        }, () -> forget(e));
         return e;
     }
 
@@ -215,13 +251,6 @@ public final class ArenaFx {
             drawFlights.remove(e.id);
         } else if (e.cat == CAT_STACK && stackFlights.get(e.id) == e) {
             stackFlights.remove(e.id);
-        }
-    }
-
-    private static void land(final Fx e) {
-        forget(e);
-        if (e.cat == CAT_STACK) { // the one landing accent of a spell going onto the stack; hand draws land quietly
-            ripple(e.to.x + e.to.width / 2f, e.to.y + e.to.height * 0.7f, Math.max(e.to.width, ArenaTheme.px(60)) * 0.9f, e.color);
         }
     }
 
@@ -239,16 +268,23 @@ public final class ArenaFx {
     // ---- ghosts ------------------------------------------------------------------------------------------------------
 
     /**
-     * What stays in the place of a card that is flying there: a dim card-shaped slot with a clear rim, in {@code rim}'s
-     * colour when it has one (a target that can be picked keeps its glow). It can still be clicked.
+     * What stays in the place of a card that is flying there: the card itself, dimmed, in a plain light rim that is no
+     * selection (a target that can be picked keeps its own glow in {@code rim}'s colour). Touching it ends the flight.
      */
-    public static void ghost(final Graphics g, final float x, final float y, final float w, final float h, final Color rim, final float alpha) {
+    public static void ghost(final Graphics g, final float x, final float y, final float w, final float h, final Color rim, final float alpha,
+            final CardView card) {
         final float r = w * 0.045f;
-        g.fillSmoothRoundRect(ArenaTheme.alpha(ArenaTheme.BLACK, 0.28f * alpha, S1), x, y, w, h, r);
+        g.fillSmoothRoundRect(ArenaTheme.alpha(ArenaTheme.NAVY, 0.55f * alpha, S1), x, y, w, h, r);
+        if (card != null) {
+            final float old = g.getfloatAlphaComposite();
+            g.setAlphaComposite(old * 0.42f * alpha);
+            CardRenderer.drawCard(g, card, x, y, w, h, CardStackPosition.Top);
+            g.setAlphaComposite(old);
+        }
         if (rim != null) {
             g.drawGlow(ArenaTheme.alpha(rim, 0.7f * alpha, S2), x, y, w, h, r, h * 0.045f);
         }
-        g.drawSmoothRoundRect(Math.max(2f, ArenaTheme.px(2f)), ArenaTheme.alpha(rim != null ? rim : ArenaTheme.GOLD_BRIGHT, 0.85f * alpha, S3), x, y, w, h, r);
+        g.drawSmoothRoundRect(Math.max(1.5f, ArenaTheme.px(1.5f)), ArenaTheme.alpha(rim != null ? rim : ArenaTheme.TEXT_DIM, 0.8f * alpha, S3), x, y, w, h, r);
     }
 
     // ---- drawing -----------------------------------------------------------------------------------------------------
@@ -315,27 +351,28 @@ public final class ArenaFx {
         final float tail = Math.max(0f, m - 0.32f);
         for (int i = 0; i <= trail; i++) {
             final float p = ArenaMotion.lerp(tail, m, i / (float) trail), k = i / (float) trail;
-            final float px = ArenaMotion.lerp(e.x, e.x2, p), py = ArenaMotion.lerp(e.y, e.y2, p);
+            final float u = 1f - p; // along the bow the arrow of the same entry would take
+            final float px = u * u * e.x + 2 * u * p * e.cx + p * p * e.x2, py = u * u * e.y + 2 * u * p * e.cy + p * p * e.y2;
             final float r = Math.max(1.5f, e.size * 0.07f * (0.25f + 0.75f * k));
             g.drawSoftShadow(ArenaTheme.alpha(e.color, 0.5f * k, S1), px - r, py - r, 2 * r, 2 * r, r, r * 1.2f);
             g.fillSmoothCircle(ArenaTheme.alpha(ArenaTheme.mix(e.color, ArenaTheme.WHITE, 0.4f + 0.5f * k, S2), 0.9f * k, S1), px, py, r * 0.7f);
         }
     }
 
-    /** A countered spell: a ring that collapses inwards, a red cross over it, and the cross breaking up. */
+    /** A countered spell: a ring that collapses inwards, then the card breaking into shards that spin outwards and fall. */
     private static void drawShatter(final Graphics g, final Fx e) {
         final float fade = 1f - ArenaMotion.IN.at(e.t);
         final float collapse = 1f - ArenaMotion.OUT.at(ArenaMotion.clamp01(e.t * 1.6f));
-        ArenaArt.halo(g, e.x, e.y, e.size * 0.8f, e.color, 0.4f * fade);
+        ArenaArt.halo(g, e.x, e.y, e.size * 0.8f, e.color, 0.35f * fade);
         g.drawSmoothCircle(Math.max(2f, ArenaTheme.px(3f)), ArenaTheme.alpha(e.color, 0.9f * fade, S1), e.x, e.y, e.size * (0.25f + 0.45f * collapse));
-        final float arm = e.size * 0.3f * (1f + 0.5f * e.t), th = Math.max(2f, e.size * 0.05f * fade);
-        final Color line = ArenaTheme.alpha(ArenaTheme.mix(e.color, ArenaTheme.WHITE, 0.3f, S2), fade, S1);
-        g.drawLine(th, line, e.x - arm, e.y - arm, e.x + arm, e.y + arm);
-        g.drawLine(th, line, e.x - arm, e.y + arm, e.x + arm, e.y - arm);
-        for (int i = 0; i < 8; i++) {
-            final float a = e.seed + i * 0.785f, d = e.size * (0.2f + 0.5f * ArenaMotion.OUT.at(e.t));
-            g.fillSmoothCircle(ArenaTheme.alpha(e.color, 0.8f * fade, S3), e.x + (float) Math.cos(a) * d, e.y + (float) Math.sin(a) * d + e.size * 0.2f * e.t * e.t,
-                    Math.max(1.5f, e.size * 0.025f));
+        final float out = ArenaMotion.OUT.at(e.t), fall = e.size * 0.5f * e.t * e.t;
+        for (int i = 0; i < SHARDS; i++) {
+            final float a = e.seed + i * (6.2831f / SHARDS), dist = e.size * (0.12f + 0.4f * (0.6f + 0.4f * ((i * 53) % 10) / 10f)) * out;
+            final float sx = e.x + (float) Math.cos(a) * dist, sy = e.y + (float) Math.sin(a) * dist * 0.8f + fall;
+            final float r = e.size * (0.05f + 0.035f * ((i * 31) % 7) / 7f) * (1f - 0.4f * e.t), spin = a + e.t * (3f + i % 3);
+            final float c1 = (float) Math.cos(spin), s1 = (float) Math.sin(spin);
+            g.fillTriangle(ArenaTheme.alpha(ArenaTheme.mix(e.color, ArenaTheme.WHITE, 0.25f * (i % 3), S2), 0.9f * fade, S3), sx + c1 * r * 1.6f, sy + s1 * r * 1.6f,
+                    sx - s1 * r, sy + c1 * r, sx + s1 * r * 0.6f, sy - c1 * r * 0.6f);
         }
     }
 
@@ -345,19 +382,26 @@ public final class ArenaFx {
         return 1f + (c + 1f) * u * u * u + c * u * u;
     }
 
+    /**
+     * One flight. Its first tenth lifts the card off the table; then it travels, rising and coming down again along an
+     * arc driven by how far along it has got (zero at the end), rolling a little with its speed, and is at rest in its
+     * slot when the crossfade begins, so the two images never differ in place.
+     */
     private static void drawFlight(final Graphics g, final Fx e) {
-        final float t = e.t, m = settle(t);
-        final float h = ArenaMotion.lerp(e.from.height, e.to.height, m), w = ArenaMotion.lerp(e.from.width, e.to.width, m);
+        final float t = e.t;
+        final float ts = ArenaMotion.clamp01((t - LIFT_END) / (CROSSFADE_FROM - LIFT_END));
+        final float p = settle(ts), travel = ArenaMotion.clamp01(p);
+        final float h = ArenaMotion.lerp(e.from.height, e.to.height, p), w = ArenaMotion.lerp(e.from.width, e.to.width, p);
         final float fcx = e.from.x + e.from.width / 2f, fcy = e.from.y + e.from.height / 2f;
         final float tcx = e.to.x + e.to.width / 2f, tcy = e.to.y + e.to.height / 2f;
         final float dist = (float) Math.hypot(tcx - fcx, tcy - fcy);
-        final float arc = (float) Math.sin(Math.PI * t);
-        final float rise = Math.min(h * e.lift * 1.6f, dist * 0.3f) * arc;
-        final float gx = ArenaMotion.lerp(fcx, tcx, m), gy = ArenaMotion.lerp(fcy, tcy, m); // the point on the table below the card
+        final float arc = (float) Math.sin(Math.PI * travel);
+        final float rise = Math.min(h * e.lift * 1.6f, dist * 0.3f) * arc + h * 0.06f * (float) Math.sin(Math.PI * ArenaMotion.clamp01(t / (LIFT_END * 2.2f)));
+        final float gx = ArenaMotion.lerp(fcx, tcx, p), gy = ArenaMotion.lerp(fcy, tcy, p); // the point on the table below the card
         final float cx = gx, cy = gy - rise;
-        // nearer the viewer in the air, turning over (back first) in the first two thirds
+        // nearer the viewer in the air, turning over (back first) in the first two thirds of its travel
         final float air = 1f + 0.14f * arc;
-        final float flipT = e.flip ? ArenaMotion.clamp01(t / 0.66f) : 1f;
+        final float flipT = e.flip ? ArenaMotion.clamp01(ts / 0.66f) : 1f;
         final float squash = Math.max(0.04f, (float) Math.abs(Math.cos(Math.PI * flipT)));
         final boolean showBack = e.card == null || e.flip && flipT < 0.5f;
         final float cw = w * air, ch = h * air;
@@ -366,27 +410,32 @@ public final class ArenaFx {
         // it fades in at the start and, over the real card drawn again by its own view, out at the end
         final float cross = ArenaMotion.SMOOTH.at(ArenaMotion.unlerp(CROSSFADE_FROM, 1f, t));
         final float old = g.getfloatAlphaComposite();
-        g.setAlphaComposite(old * ArenaMotion.clamp01(t / 0.1f) * (1f - cross));
-        // a shadow on the table: it stays under the card's place, and softens, spreads and fades as the card rises
-        final float spread = ArenaTheme.px(6) + rise * 0.5f;
-        g.drawSoftShadow(ArenaTheme.alpha(ArenaTheme.BLACK, 0.62f - 0.3f * arc, S1), gx - w * 0.48f - ch * 0.01f, gy - h * 0.46f + ch * 0.03f + rise * 0.18f,
-                w * 0.96f, h * 0.96f, w * 0.045f, spread);
-        // it settles into the lean of the slot it lands in
-        final float lean = e.lean * m;
-        final boolean turned = Math.abs(lean) > 0.05f;
-        if (turned) {
-            g.startRotateTransform(x + drawW / 2f, y + ch, -lean);
+        boolean turned = false;
+        try {
+            g.setAlphaComposite(old * ArenaMotion.clamp01(t / 0.06f) * (1f - cross));
+            // a shadow on the table: it stays under the card's place, and softens, spreads and fades as the card rises
+            final float spread = ArenaTheme.px(6) + rise * 0.5f;
+            g.drawSoftShadow(ArenaTheme.alpha(ArenaTheme.BLACK, 0.62f - 0.3f * arc, S1), gx - w * 0.48f - ch * 0.01f, gy - h * 0.46f + ch * 0.03f + rise * 0.18f,
+                    w * 0.96f, h * 0.96f, w * 0.045f, spread);
+            // it settles into the lean of the slot it lands in, and rolls a little the way it goes, most when it is fastest
+            final float roll = Math.signum(tcx - fcx) * 7f * arc * Math.min(1f, Math.abs(tcx - fcx) / (ArenaBoard.windowH() * 0.3f));
+            final float lean = e.lean * p + roll;
+            turned = Math.abs(lean) > 0.05f;
+            if (turned) {
+                g.startRotateTransform(x + drawW / 2f, y + ch, -lean);
+            }
+            if (showBack) {
+                ArenaCards.drawCardBack(g, e.owner, x, y, drawW, ch, Math.max(ArenaTheme.px(3), drawW / 18f), false);
+            } else {
+                CardRenderer.drawCard(g, e.card, x, y, drawW, ch, CardStackPosition.Top);
+                g.drawSmoothRoundRect(Math.max(1f, ch * 0.006f), ArenaTheme.alpha(e.color, 0.7f * (1f - travel), S1), x, y, drawW, ch, drawW * 0.045f);
+            }
+        } finally {
+            if (turned) {
+                g.endTransform();
+            }
+            g.setAlphaComposite(old);
         }
-        if (showBack) {
-            ArenaCards.drawCardBack(g, e.owner, x, y, drawW, ch, Math.max(ArenaTheme.px(3), drawW / 18f), false);
-        } else {
-            CardRenderer.drawCard(g, e.card, x, y, drawW, ch, CardStackPosition.Top);
-            g.drawSmoothRoundRect(Math.max(1f, ch * 0.006f), ArenaTheme.alpha(e.color, 0.7f * (1f - m), S1), x, y, drawW, ch, drawW * 0.045f);
-        }
-        if (turned) {
-            g.endTransform();
-        }
-        g.setAlphaComposite(old);
     }
 
     /** A card's height as the hand fan draws it, for flights that have to guess it before the fan has laid the card out. */

@@ -8,6 +8,7 @@ import forge.Graphics;
 import forge.assets.FSkinImage;
 import forge.localinstance.properties.ForgePreferences;
 import forge.menu.FDropDown;
+import forge.menu.FCheckBoxMenuItem;
 import forge.menu.FMenuItem;
 import forge.menu.FPopupMenu;
 import forge.screens.match.MatchController;
@@ -146,10 +147,9 @@ public final class ArenaCornerMenu extends FDisplayObject {
                 addItem(new FMenuItem(Forge.getLocalizer().getMessage("lblDev"), FSkinImage.SETTINGS, e -> openDropDown(screen.getDevMenu())));
             }
             // reduce motion, within reach in a match: flights, sparks, arrows drawing in and everything that breathes
-            final boolean effects = ArenaTheme.isEffectsOn();
-            addItem(new FMenuItem(Forge.getLocalizer().getMessage(effects ? "lblArenaEffectsOn" : "lblArenaEffectsOff"), FSkinImage.HDCHOICE, e -> {
+            addItem(new FCheckBoxMenuItem(Forge.getLocalizer().getMessage("lblArenaEffects"), ArenaTheme.isEffectsOn(), e -> {
                 final forge.localinstance.properties.ForgePreferences prefs = forge.model.FModel.getPreferences();
-                prefs.setPref(forge.localinstance.properties.ForgePreferences.FPref.UI_ARENA_EFFECTS, !effects);
+                prefs.setPref(forge.localinstance.properties.ForgePreferences.FPref.UI_ARENA_EFFECTS, !ArenaTheme.isEffectsOn());
                 prefs.save();
                 ArenaTheme.refresh();
             }));
