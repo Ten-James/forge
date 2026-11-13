@@ -1250,8 +1250,8 @@ public abstract class VCardDisplayArea extends VDisplayArea implements ActivateH
                     st.pointerV = (Forge.mouseMovedY - screenPos.y) / (st.cardHeight > 0 ? st.cardHeight : getHeight());
                 }
                 final float cardH = st.cardHeight > 0 ? st.cardHeight : getHeight();
-                if (ArenaFx.claimDraw(getCard(), screenPos, cardH, st)) {
-                    return; //it is flying in from the library: the effect layer draws it until it lands in this slot
+                if (ArenaFx.handCardInFlight(g, getCard(), screenPos, cardH, st.fanLean)) {
+                    return; //it is flying in from the library: the effect layer draws it, and a ghost holds its slot
                 }
                 ArenaCards.drawHandCard(g, getCard(), st, isHovered(), 0, 0, getWidth(), cardH);
                 return;

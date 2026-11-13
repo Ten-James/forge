@@ -221,7 +221,7 @@ public class VPrompt extends FContainer {
 
     @Override
     public void draw(Graphics g) {
-        if (isArenaPrompt() && arena.mode == ArenaMatchLayout.PromptMode.DECISION && !arenaLateDraw) {
+        if (isArenaPrompt() && arena.mode != null && !arenaLateDraw) {
             return; //drawn by the match screen after the arcs
         }
         super.draw(g);

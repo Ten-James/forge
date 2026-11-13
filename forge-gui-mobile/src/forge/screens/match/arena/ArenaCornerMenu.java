@@ -145,6 +145,14 @@ public final class ArenaCornerMenu extends FDisplayObject {
             if (ForgePreferences.DEV_MODE && !MatchController.instance.isReplay()) {
                 addItem(new FMenuItem(Forge.getLocalizer().getMessage("lblDev"), FSkinImage.SETTINGS, e -> openDropDown(screen.getDevMenu())));
             }
+            // reduce motion, within reach in a match: flights, sparks, arrows drawing in and everything that breathes
+            final boolean effects = ArenaTheme.isEffectsOn();
+            addItem(new FMenuItem(Forge.getLocalizer().getMessage(effects ? "lblArenaEffectsOn" : "lblArenaEffectsOff"), FSkinImage.HDCHOICE, e -> {
+                final forge.localinstance.properties.ForgePreferences prefs = forge.model.FModel.getPreferences();
+                prefs.setPref(forge.localinstance.properties.ForgePreferences.FPref.UI_ARENA_EFFECTS, !effects);
+                prefs.save();
+                ArenaTheme.refresh();
+            }));
             addItem(new FMenuItem(Forge.getLocalizer().getMessageorUseDefault("lblArenaGdxShortcuts", "Keyboard shortcuts")
                     + "  [" + ArenaShortcuts.keyLabels(ArenaShortcuts.Action.SHOW_SHORTCUTS) + "]", FSkinImage.HDCHOICE, e -> ArenaShortcutSheet.open()));
         }

@@ -198,16 +198,23 @@ public final class ArenaMotion {
 
     /**
      * For a view to call as it draws something that breathes: how far through its slow cycle that is, 0..1 (a sine),
-     * and a request for another frame. Nothing needs starting or stopping: once a view stops drawing it (hidden,
+     * and a request for another frame (with the Arena effects setting off, which is the reduce-motion switch, it is a
+     * constant 1 and asks for nothing). Nothing needs starting or stopping: once a view stops drawing it (hidden,
      * gone), it costs nothing. While something breathes the board renders at the display rate.
      */
     public static float pulse(final float seconds) {
+        if (!ArenaTheme.isEffectsOn()) {
+            return 1f; // reduce motion: whatever breathes stays lit and asks for no frames
+        }
         requestFrame();
         return (float) (0.5d + 0.5d * Math.sin((System.nanoTime() - START) / 1e9d / seconds * 2d * Math.PI));
     }
 
     /** {@link #pulse(float)} with a phase offset (0..1), so neighbours do not breathe in step. */
     public static float pulse(final float seconds, final float phase) {
+        if (!ArenaTheme.isEffectsOn()) {
+            return 1f;
+        }
         requestFrame();
         return (float) (0.5d + 0.5d * Math.sin(((System.nanoTime() - START) / 1e9d / seconds + phase) * 2d * Math.PI));
     }

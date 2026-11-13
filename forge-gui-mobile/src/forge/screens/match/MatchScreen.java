@@ -625,6 +625,7 @@ public class MatchScreen extends FScreen {
     @Override
     public void onClose(Consumer<Boolean> canCloseCallback) {
         ArenaTheme.removeListener(arenaThemeListener);
+        ArenaTableBoard.release(); //the board's picture goes with the match
         MatchController.writeMatchPreferences();
         SoundSystem.instance.setBackgroundMusic(MusicPlaylist.MENUS);
         if (chat != null) {
@@ -994,8 +995,8 @@ public class MatchScreen extends FScreen {
         drawArcs(g);
         CardFlightOverlay.draw(g, bottomPlayerPanel.getPlayer(), getHeight());
         ArenaFx.draw(g);
-        if (arenaLaidOut && isArenaBoard() && bottomPlayerPrompt.isVisible() && arenaPromptMode == ArenaMatchLayout.PromptMode.DECISION) {
-            bottomPlayerPrompt.drawLate(g); //a decision above the arcs: they never run through its words
+        if (arenaLaidOut && isArenaBoard() && bottomPlayerPrompt.isVisible() && arenaPromptMode != null) {
+            bottomPlayerPrompt.drawLate(g); //the prompt over the arcs and effects, in every mode: they never run through its words or buttons
         }
         forge.screens.match.arena.ArenaTurnBanner.draw(g, getWidth(), getHeight());
         drawCardPreview(g);
@@ -1673,6 +1674,7 @@ public class MatchScreen extends FScreen {
     }
 
     public void updateZones(final Iterable<PlayerZoneUpdate> zonesToUpdate) {
+        ArenaFx.zonesUpdated(zonesToUpdate); //the Arena look reads draws from these updates
         for (final PlayerZoneUpdate update : zonesToUpdate) {
             final PlayerView owner = update.getPlayer();
             final VPlayerPanel panel = getPlayerPanel(owner);

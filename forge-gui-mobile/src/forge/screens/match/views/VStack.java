@@ -132,29 +132,8 @@ public class VStack extends FDropDown {
     private final Map<Integer, CardView> arenaShownSpells = new HashMap<>();
     private final Map<Integer, Rectangle> arenaShownRects = new HashMap<>();
 
-    // every entry the Arena stack showed (a spell or an ability), by stack item id: one that is gone sparks where it stood
-    private final Map<Integer, CardView> arenaShownItems = new HashMap<>();
-    private final Map<Integer, Rectangle> arenaShownItemRects = new HashMap<>();
-
-    private void arenaSparkResolved(FCollectionView<StackItemView> stack) {
-        if (arenaShownItems.isEmpty()) {
-            return;
-        }
-        final Set<Integer> stillItems = new HashSet<>();
-        for (StackItemView item : stack) {
-            stillItems.add(item.getId());
-        }
-        for (Map.Entry<Integer, CardView> e : arenaShownItems.entrySet()) {
-            if (!stillItems.contains(e.getKey())) {
-                ArenaFx.stackEntryGone(e.getKey(), e.getValue(), arenaShownItemRects.get(e.getKey()));
-            }
-        }
-        arenaShownItems.clear();
-        arenaShownItemRects.clear();
-    }
-
     private void arenaSendOffLeavers(FCollectionView<StackItemView> stack) {
-        arenaSparkResolved(stack);
+        ArenaFx.stackSynced(stack); //what has resolved or been countered since, goes off where it stood
         if (arenaShownSpells.isEmpty()) {
             return;
         }
@@ -798,16 +777,10 @@ public class VStack extends FDropDown {
                 arenaShownSpells.put(sourceCard.getId(), sourceCard);
                 arenaShownRects.computeIfAbsent(sourceCard.getId(), k -> new Rectangle()).set(screenPos.x, screenPos.y, w, h);
             }
-            if (ArenaTheme.isEffectsOn()) { //it flies in from where it was cast or activated; the effect layer draws it until it lands here
-                final int id = stackInstance.getId();
-                arenaShownItems.put(id, sourceCard);
-                arenaShownItemRects.computeIfAbsent(id, k -> new Rectangle()).set(screenPos.x, screenPos.y, w, h);
-                ArenaFx.stackEntryShown(id, sourceCard, stackInstance.getActivatingPlayer(), stackInstance.isAbility(), screenPos,
-                        stackInstance.isAbility() ? null : VCardDisplayArea.CardAreaPanel.peekHandStart(sourceCard));
-                if (ArenaFx.isFlying(id)) {
-                    ArenaFx.retarget(id, screenPos.x, screenPos.y, w, h);
-                    return;
-                }
+            final boolean target = MatchController.instance.isHighlighted(stackInstance) ? true : isSelectableTarget();
+            final Color ghostRim = MatchController.instance.isHighlighted(stackInstance) ? ArenaTheme.CHOSEN : target ? ArenaTheme.SELECTABLE : null;
+            if (ArenaFx.stackEntry(g, stackInstance, screenPos, w, h, ghostRim, stackInstance.isAbility() ? null : VCardDisplayArea.CardAreaPanel.peekHandStart(sourceCard))) {
+                return; //it is flying in from where it was cast: the effect layer draws it, and a ghost holds its place
             }
             final boolean top = activeItem == this;
             final boolean pickable = isSelectableTarget();

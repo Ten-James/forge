@@ -12,11 +12,11 @@
  *     badges, dividers, glow, shadow, text, board backdrop, portraits), on top of the new {@code forge.Graphics}
  *     shape/glow/tilt/fade helpers.</li>
  * <li>{@link forge.screens.match.arena.ArenaTableBoard}: the clean 3D board (the default; {@code UI_ARENA_CLEAN_BOARD}),
- *     a table in perspective baked once per size into one texture. {@code ArenaBoardPainter} is the flagstone mat it
+ *     a calm table in perspective baked a few rows per frame into one texture (see docs/Development/Arena-Board-and-Effects.md). {@code ArenaBoardPainter} is the flagstone mat it
  *     replaces when that setting is off.</li>
  * <li>{@link forge.screens.match.arena.ArenaFx}: the effect stack drawn over the board by the match screen's overlay
- *     (card flights, rings, bursts). Cards drawn from the library fly to the hand (the hand fan asks
- *     {@code ArenaFx.claimDraw}; an opponent's draws are noticed from the zone sizes), spells and abilities fly onto
+ *     (card flights, rings, bursts, bolts). Cards drawn from the library fly to the hand (read from the zone
+ *     updates in {@code ArenaFx.zonesUpdated}; the hand fan asks {@code handCardInFlight} and draws a ghost), spells and abilities fly onto
  *     the stack ({@code VStack}) and spark when they resolve, permanents land with a ring ({@code CardFlightOverlay}).
  *     All of it follows {@code ArenaTheme.isEffectsOn()} ({@code UI_ARENA_EFFECTS}).</li>
  * <li>{@link forge.screens.match.arena.ArenaArcs}: the targeting arrows: arcs that draw themselves in with an arrow head.</li>

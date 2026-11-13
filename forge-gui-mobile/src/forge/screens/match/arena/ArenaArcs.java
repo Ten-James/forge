@@ -100,8 +100,11 @@ public final class ArenaArcs {
         // the discs overlap well, so the core reads as one line
         final int n = Math.max(24, Math.min(420, Math.round(len * 1.15f / (coreR * 1.1f))));
         // a pulse running towards the target, once every 0.9 s
-        final float run = (ArenaMotion.seconds() % 0.9f) / 0.9f;
-        ArenaMotion.requestFrame();
+        final boolean moving = ArenaTheme.isEffectsOn();
+        final float run = moving ? (ArenaMotion.seconds() % 0.9f) / 0.9f : -1f; // reduce motion: no pulse running along the arc
+        if (moving) {
+            ArenaMotion.requestFrame();
+        }
         final Color glow = ArenaTheme.alpha(c, Math.min(0.5f, 6.5f / n * 2.2f), S1);
         final int last = Math.min(n, (int) Math.ceil(n * reach));
         for (int i = 0; i <= last; i++) {
@@ -137,16 +140,20 @@ public final class ArenaArcs {
         g.drawGlow(ArenaTheme.alpha(c, 0.7f * arrive, S3), x2 - ring, y2 - ring, 2 * ring, 2 * ring, ring, ArenaTheme.px(10));
         g.drawSmoothCircle(Math.max(1.5f, ArenaTheme.px(2.5f)), ArenaTheme.alpha(ArenaTheme.WHITE, 0.92f * arrive, S3), x2, y2, ring);
         g.fillSmoothCircle(ArenaTheme.alpha(c, 0.95f * arrive, S3), x2, y2, ring * 0.38f);
-        // the arrow head just before the ring, pointing the way the line arrives
+        // the arrow head: a big chevron just before the ring, pointing the way the line arrives, with a soft glow under it
         final float adx = x2 - cx, ady = y2 - cy, alen = (float) Math.sqrt(adx * adx + ady * ady);
         if (alen > 1f) {
             final float ux = adx / alen, uy = ady / alen, vx = -uy, vy = ux;
-            final float tipX = x2 - ux * ring * 1.15f, tipY = y2 - uy * ring * 1.15f;
-            final float headLen = ring * 1.5f * arrive, half = ring * 0.75f * arrive;
-            final float bx = tipX - ux * headLen, by = tipY - uy * headLen;
-            g.fillTriangle(ArenaTheme.alpha(c, 0.35f * arrive, S3), tipX + ux * ring * 0.2f, tipY + uy * ring * 0.2f, bx - ux * ring * 0.2f + vx * (half + ring * 0.25f),
-                    by - uy * ring * 0.2f + vy * (half + ring * 0.25f), bx - ux * ring * 0.2f - vx * (half + ring * 0.25f), by - uy * ring * 0.2f - vy * (half + ring * 0.25f));
-            g.fillTriangle(ArenaTheme.alpha(ArenaTheme.mix(c, ArenaTheme.WHITE, 0.45f, S2), 0.97f * arrive, S3), tipX, tipY, bx + vx * half, by + vy * half, bx - vx * half, by - vy * half);
+            final float tipX = x2 - ux * ring * 1.2f, tipY = y2 - uy * ring * 1.2f;
+            final float arm = ring * 2.1f * arrive, spread = arm * 0.62f;
+            final float bx = tipX - ux * arm, by = tipY - uy * arm;
+            final float thick = Math.max(2.5f, ring * 0.5f);
+            final Color head = ArenaTheme.mix(c, ArenaTheme.WHITE, 0.5f, S2);
+            g.drawLine(thick * 2.4f, ArenaTheme.alpha(c, 0.28f * arrive, S3), bx + vx * spread, by + vy * spread, tipX, tipY);
+            g.drawLine(thick * 2.4f, ArenaTheme.alpha(c, 0.28f * arrive, S3), bx - vx * spread, by - vy * spread, tipX, tipY);
+            g.drawLine(thick, ArenaTheme.alpha(head, 0.98f * arrive, S3), bx + vx * spread, by + vy * spread, tipX + ux * thick * 0.4f, tipY + uy * thick * 0.4f);
+            g.drawLine(thick, ArenaTheme.alpha(head, 0.98f * arrive, S3), bx - vx * spread, by - vy * spread, tipX + ux * thick * 0.4f, tipY + uy * thick * 0.4f);
+            g.fillSmoothCircle(ArenaTheme.alpha(head, 0.98f * arrive, S3), tipX, tipY, thick * 0.5f);
         }
     }
 }
