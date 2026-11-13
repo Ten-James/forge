@@ -4,6 +4,8 @@ import java.util.*;
 
 import forge.game.card.CardView;
 import forge.game.card.CardView.CardStateView;
+import forge.game.combat.CombatView;
+import forge.game.GameView;
 import forge.game.player.PlayerView;
 import forge.gui.FThreads;
 import forge.localinstance.properties.ForgePreferences;
@@ -16,6 +18,7 @@ import forge.screens.match.views.VCardDisplayArea.CardAreaPanel;
 import forge.toolbox.FCardPanel;
 import forge.toolbox.FContainer;
 import forge.toolbox.FDisplayObject;
+import forge.util.collect.FCollection;
 import forge.util.collect.FCollectionView;
 
 public class VField extends FContainer {
@@ -150,7 +153,8 @@ public class VField extends FContainer {
                         cardState.getKeywords().equals(cState.getKeywords()) &&
                         card.isTapped() == c.isTapped() && // don't stack tapped tokens on untapped tokens
                         card.isSick() == c.isSick() && //don't stack sick tokens on non sick
-                        card.isToken() == c.isToken()) { //don't stack tokens on top of non-tokens
+                        card.isToken() == c.isToken() && //don't stack tokens on top of non-tokens
+                        sameCombatRole(card, c)) { //an attacker or blocker stands apart, to be picked and read on its own
                     stackOnto(card, c);
                     return true;
                 }
@@ -161,13 +165,45 @@ public class VField extends FContainer {
                         cardState.getKeywords().equals(cState.getKeywords()) &&
                         cardState.getColors() == cState.getColors() &&
                         card.isSick() == c.isSick() && //don't stack sick tokens on non sick
-                        card.isToken() == c.isToken()) { //don't stack tokens on top of non-tokens
+                        card.isToken() == c.isToken() && //don't stack tokens on top of non-tokens
+                        (!card.isToken() || card.isTapped() == c.isTapped())) { //a tapped token (a spent Treasure) leaves its untapped pile
                     stackOnto(card, c);
                     return true;
                 }
             }
         }
         return false;
+    }
+
+    /**
+     * Whether two creatures take the same part in combat: both out of it, or attacking the same defender, or blocking
+     * the same attackers. A token that attacks or blocks must not hide in a pile of the ones that stay home.
+     */
+    private static boolean sameCombatRole(final CardView a, final CardView b) {
+        final boolean attacking = a.isAttacking(), blocking = a.isBlocking();
+        if (attacking != b.isAttacking() || blocking != b.isBlocking()) {
+            return false;
+        }
+        if (!attacking && !blocking) {
+            return true;
+        }
+        final GameView game = MatchController.instance.getGameView();
+        final CombatView combat = game == null ? null : game.getCombat();
+        if (combat == null) {
+            return true;
+        }
+        if (attacking && combat.getDefender(a) != combat.getDefender(b)) {
+            return false;
+        }
+        if (blocking) {
+            for (final CardView attacker : combat.getAttackers()) {
+                final FCollection<CardView> blockers = combat.getBlockers(attacker);
+                if (blockers != null && blockers.contains(a) != blockers.contains(b)) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private static void stackOnto(CardView card, CardView topOfStack) {
