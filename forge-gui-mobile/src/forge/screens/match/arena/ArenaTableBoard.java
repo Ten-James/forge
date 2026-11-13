@@ -1,8 +1,14 @@
 package forge.screens.match.arena;
 
 import java.nio.ByteBuffer;
+import java.util.EnumMap;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.glutils.PixmapTextureData;
@@ -20,10 +26,12 @@ import forge.Graphics;
  * small screen.
  *
  * <p>The picture is worked out into a texture of up to 2560 pixels wide (three quarters of the window on a normal
- * monitor, so grid lines stay sharp at 21:9 and 32:9) and drawn as one image per frame. It is baked a few rows per
- * frame, so there is never a hitch: while a new size or mood is being worked out the last picture stays on screen,
- * stretched, and until the first one exists a plain gradient stands in. The texture is a managed one (a lost GL context
- * brings it back) and is let go when the match is left ({@link #release}). Nothing is allocated per frame.</p>
+ * monitor, so grid lines stay sharp at 21:9 and 32:9) and drawn as one image per frame. The pixels are filled on a
+ * worker thread (nothing of GL is touched there) and uploaded on the render thread when they are ready, so frames are
+ * never spent on it, whatever the refresh rate. When a new size or mood is ready it fades in over the old picture; a
+ * plain gradient stands in until the first one exists. A size is only baked once the window has held still for a
+ * moment. The texture is a managed one (a lost GL context brings it back), is kept from one match to the next, and is
+ * let go when the Arena look or the clean board is turned off ({@link #release}). Nothing is allocated per frame.</p>
  */
 public final class ArenaTableBoard {
     private ArenaTableBoard() { }
@@ -31,9 +39,9 @@ public final class ArenaTableBoard {
     /** The longest side of the baked picture, the shortest, and how large a share of the window it is at most. */
     private static final int MAX_SIDE = 2560, MIN_SIDE = 320;
     private static final float MAX_SHARE = 0.75f;
-    /** How long a size has to hold still before it is baked, and how much time a frame may spend baking (a first picture may take more). */
+    /** How long a size has to hold still before it is baked, and how long a new picture takes to fade in. */
     private static final int SETTLE_MS = 160;
-    private static final long BUDGET_NANOS = 3_500_000L, FIRST_BUDGET_NANOS = 12_000_000L;
+    private static final int FADE_MS = 320;
 
     // ---- the table in perspective: the camera looks down at the table; the horizon lies well above the window -------
     /** Where the horizon is, in window heights from the top (negative: above the window), and the grid's cell size. */
@@ -48,6 +56,7 @@ public final class ArenaTableBoard {
     /** One mood: the felt in the dark and under the light, the haze, the grid lines, the light, the cool and warm halves. */
     private static final class Mood {
         final int[] dark, lit, haze, line, light, cool;
+        final Color hazeColor, litColor;
         final float lightGain;
 
         Mood(final int dark, final int lit, final int haze, final int line, final int light, final int cool, final float lightGain) {
@@ -58,6 +67,8 @@ public final class ArenaTableBoard {
             this.light = split(light);
             this.cool = split(cool);
             this.lightGain = lightGain;
+            this.hazeColor = ArenaTheme.rgb(haze);
+            this.litColor = ArenaTheme.rgb(lit);
         }
 
         private static int[] split(final int hex) {
@@ -66,41 +77,81 @@ public final class ArenaTableBoard {
     }
 
     // day, default and night, like the flagstone board's moods
-    private static final Mood[] MOODS = {
-            new Mood(0x243651, 0x5A7898, 0x1B2A40, 0xBBD3EE, 0xFFF3DF, 0x6E92C4, 0.34f),
-            new Mood(0x1B2840, 0x40587E, 0x121C30, 0x9DBBE6, 0xFFE8C8, 0x5F86C0, 0.30f),
-            new Mood(0x0E1528, 0x25355A, 0x080D1B, 0x6F8CC4, 0xC6D4FF, 0x4A6AB0, 0.30f),
-    };
+    private static final Map<ArenaTheme.BoardVariant, Mood> MOODS = new EnumMap<>(ArenaTheme.BoardVariant.class);
+    static {
+        MOODS.put(ArenaTheme.BoardVariant.DAY, new Mood(0x243651, 0x5A7898, 0x1B2A40, 0xBBD3EE, 0xFFF3DF, 0x6E92C4, 0.34f));
+        MOODS.put(ArenaTheme.BoardVariant.DEFAULT, new Mood(0x1B2840, 0x40587E, 0x121C30, 0x9DBBE6, 0xFFE8C8, 0x5F86C0, 0.30f));
+        MOODS.put(ArenaTheme.BoardVariant.NIGHT, new Mood(0x0E1528, 0x25355A, 0x080D1B, 0x6F8CC4, 0xC6D4FF, 0x4A6AB0, 0.30f));
+    }
 
-    /** A picture that is being baked, row by row. */
-    private static final class Job {
+    private static final int RUNNING = 0, DONE = 1, CANCELLED = 2;
+    private static ExecutorService worker;
+
+    /** A picture being baked on the worker thread. Whoever comes second (the worker or a cancel) disposes the pixmap. */
+    private static final class Job implements Runnable {
         final Pixmap pixmap;
-        final int mood;
+        final ArenaTheme.BoardVariant mood;
         final float aspect;
-        int row;
+        final int w, h;
+        final AtomicInteger state = new AtomicInteger(RUNNING);
 
-        Job(final int w, final int h, final int mood, final float aspect) {
+        Job(final int w, final int h, final ArenaTheme.BoardVariant mood, final float aspect) {
             this.pixmap = new Pixmap(w, h, Pixmap.Format.RGBA8888);
+            this.w = w;
+            this.h = h;
             this.mood = mood;
             this.aspect = aspect;
-            pixmap.getPixels().clear();
+        }
+
+        @Override
+        public void run() {
+            final ByteBuffer out = pixmap.getPixels().duplicate(); // its own position, away from the render thread's
+            out.clear();
+            final Mood m = MOODS.get(mood);
+            for (int row = 0; row < h && state.get() == RUNNING; row++) {
+                renderRow(out, row, w, h, aspect, m);
+            }
+            if (state.compareAndSet(RUNNING, DONE)) {
+                if (Gdx.graphics != null) {
+                    Gdx.graphics.requestRendering(); // ready: the render thread uploads it on its next frame
+                }
+            } else {
+                pixmap.dispose(); // cancelled while it ran
+            }
+        }
+
+        /** Drops it: the pixmap goes now if it is ready, or when the worker notices. */
+        void cancel() {
+            if (!state.compareAndSet(RUNNING, CANCELLED)) {
+                pixmap.dispose(); // it had finished, and nobody else will use it
+            }
         }
     }
 
     private static Pixmap pixmap;   // what the texture shows (kept: the texture is managed)
     private static Texture texture;
-    private static int shownMood = -1, shownW, shownH;
+    private static ArenaTheme.BoardVariant shownMood;
+    private static int shownW, shownH;
     private static Job job;
+    // the picture that was shown before the new one, fading out
+    private static Texture fadeFrom;
+    private static Pixmap fadePixmap;
+    private static float fade = 1f;
+    private static ArenaMotion.Tween fadeTween;
     private static float seenW = -1, seenH = -1;
     private static long seenSince;
     private static final int[] SIZE = new int[2];
+
+    /** Whether a picture (or the making of one) is held, so that the match screen can let go of it when it is not wanted. */
+    public static boolean isLoaded() {
+        return texture != null || job != null;
+    }
 
     /** Draws the table over {@code x, y, w, h} (the match screen's area). Render thread. */
     public static void draw(final Graphics g, final float x, final float y, final float w, final float h, final ArenaTheme.BoardVariant variant) {
         if (w <= 0 || h <= 0) {
             return;
         }
-        final int mood = variant.ordinal();
         if (w != seenW || h != seenH) {
             seenW = w;
             seenH = h;
@@ -108,35 +159,90 @@ public final class ArenaTableBoard {
         }
         final boolean settled = TimeUtils.timeSinceMillis(seenSince) >= SETTLE_MS;
         sizeFor(w, h);
-        final boolean stale = texture == null || mood != shownMood || SIZE[0] != shownW || SIZE[1] != shownH;
-        if (job != null && (job.mood != mood || job.pixmap.getWidth() != SIZE[0] || job.pixmap.getHeight() != SIZE[1])) {
-            job.pixmap.dispose(); // what it was making is not what is wanted now
+        if (job != null && (job.mood != variant || job.w != SIZE[0] || job.h != SIZE[1])) {
+            job.cancel(); // what it is making is not what is wanted now
             job = null;
         }
-        if (stale && job == null && (settled || texture == null)) {
-            job = new Job(SIZE[0], SIZE[1], mood, w / h);
+        if (job != null && job.state.get() == DONE) {
+            swapIn(job);
+            job = null;
         }
-        if (job != null) {
-            advance(texture == null ? FIRST_BUDGET_NANOS : BUDGET_NANOS);
-            ArenaMotion.requestFrame();
+        final boolean stale = texture == null || variant != shownMood || SIZE[0] != shownW || SIZE[1] != shownH;
+        if (stale && job == null && settled) {
+            job = new Job(SIZE[0], SIZE[1], variant, w / h);
+            if (worker == null) {
+                worker = Executors.newSingleThreadExecutor(r -> {
+                    final Thread t = new Thread(r, "arena-board");
+                    t.setDaemon(true);
+                    t.setPriority(Thread.MIN_PRIORITY);
+                    return t;
+                });
+            }
+            worker.execute(job);
         } else if (stale && !settled) {
-            ArenaMotion.requestFrame(); // the picture is stale: come back once the size has held still
+            ArenaMotion.requestFrame(); // come back once the size has held still
+        }
+        if (fade < 1f && fadeFrom != null) {
+            g.drawImage(fadeFrom, x, y, w, h);
+        } else if (texture == null || fade < 1f) {
+            drawFallback(g, x, y, w, h, variant);
         }
         if (texture != null) {
-            g.drawImage(texture, x, y, w, h);
-        } else { // the first picture is still being made
-            final Mood m = MOODS[mood];
-            g.fillGradientRect(ArenaTheme.rgb((m.haze[0] << 16) | (m.haze[1] << 8) | m.haze[2]), ArenaTheme.rgb((m.lit[0] << 16) | (m.lit[1] << 8) | m.lit[2]), true,
-                    x, y, w, h);
+            if (fade < 1f) {
+                final float old = g.getfloatAlphaComposite();
+                g.setAlphaComposite(old * fade);
+                g.drawImage(texture, x, y, w, h);
+                g.setAlphaComposite(old);
+            } else {
+                g.drawImage(texture, x, y, w, h);
+            }
         }
     }
 
-    /** Lets go of the picture (the match is left, the theme went off): the next draw bakes it again. Render thread. */
+    /** A plain gradient of the mood, for while the first picture is being made. */
+    private static void drawFallback(final Graphics g, final float x, final float y, final float w, final float h, final ArenaTheme.BoardVariant variant) {
+        final Mood m = MOODS.get(variant);
+        g.fillGradientRect(m.hazeColor, m.litColor, true, x, y, w, h);
+    }
+
+    /** A finished picture becomes the one on the screen, fading in over the one that was there. */
+    private static void swapIn(final Job j) {
+        endFade(); // a fade still running is cut short: its old picture goes
+        fadeFrom = texture;
+        fadePixmap = pixmap;
+        pixmap = j.pixmap;
+        texture = new Texture(new PixmapTextureData(pixmap, null, false, false, true)); // managed: kept pixmap, rebuilt after a lost GL context
+        texture.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
+        shownMood = j.mood;
+        shownW = j.w;
+        shownH = j.h;
+        fade = 0f;
+        fadeTween = ArenaMotion.play(FADE_MS, ArenaMotion.LINEAR, t -> fade = t, ArenaTableBoard::endFade);
+    }
+
+    private static void endFade() {
+        if (fadeTween != null) {
+            fadeTween.cancel();
+            fadeTween = null;
+        }
+        fade = 1f;
+        if (fadeFrom != null) {
+            fadeFrom.dispose();
+            fadeFrom = null;
+        }
+        if (fadePixmap != null) {
+            fadePixmap.dispose();
+            fadePixmap = null;
+        }
+    }
+
+    /** Lets go of the picture (the Arena look or the clean board went off): the next draw bakes it again. Render thread. */
     public static void release() {
         if (job != null) {
-            job.pixmap.dispose();
+            job.cancel();
             job = null;
         }
+        endFade();
         if (texture != null) {
             texture.dispose();
             texture = null;
@@ -145,7 +251,7 @@ public final class ArenaTableBoard {
             pixmap.dispose();
             pixmap = null;
         }
-        shownMood = -1;
+        shownMood = null;
         shownW = shownH = 0;
         seenW = seenH = -1;
     }
@@ -155,44 +261,6 @@ public final class ArenaTableBoard {
         SIZE[0] = Math.max(MIN_SIDE / 2, Math.round(w * scale));
         SIZE[1] = Math.max(MIN_SIDE / 2, Math.round(h * scale));
     }
-
-    /** Bakes rows of the current job for up to {@code budget} nanoseconds; when it is done, it becomes the picture. */
-    private static void advance(final long budget) {
-        final Job j = job;
-        final long end = System.nanoTime() + budget;
-        final Mood m = MOODS[j.mood];
-        final int ph = j.pixmap.getHeight();
-        final ByteBuffer out = j.pixmap.getPixels();
-        while (j.row < ph && System.nanoTime() < end) {
-            renderRow(out, j.row, j.pixmap.getWidth(), ph, j.aspect, m);
-            j.row++;
-        }
-        if (j.row < ph) {
-            return;
-        }
-        out.position(0);
-        // done: swap it in (the old picture goes only now, so the screen never shows a gap)
-        final Texture old = texture;
-        final Pixmap oldPixmap = pixmap;
-        pixmap = j.pixmap;
-        texture = new Texture(new PixmapTextureData(pixmap, null, false, false, true)); // managed: kept pixmap, rebuilt after a lost GL context
-        texture.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
-        shownMood = j.mood;
-        shownW = pixmap.getWidth();
-        shownH = ph;
-        job = null;
-        if (old != null) {
-            old.dispose();
-        }
-        if (oldPixmap != null) {
-            oldPixmap.dispose();
-        }
-        if (Gdx.graphics != null) {
-            Gdx.graphics.requestRendering();
-        }
-    }
-
-    // ---- the picture ----------------------------------------------------------------------------------------------------
 
     private static float smooth(final float a, final float b, final float v) {
         final float t = Math.max(0f, Math.min(1f, (v - a) / (b - a)));

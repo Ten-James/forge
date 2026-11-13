@@ -346,6 +346,7 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
     @Override
     public Void visit(final GameEventSpellResolved event) {
         needStackUpdate = true;
+        matchController.notifyStackResolved(event);
         return processEvent();
     }
 

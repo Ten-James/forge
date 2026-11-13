@@ -239,12 +239,18 @@ public final class ArenaPortrait implements ArenaSkin<VAvatar> {
             if (st.lifeRoll != null) {
                 st.lifeRoll.cancel();
             }
-            st.lifeRoll = ArenaMotion.play(Math.min(800, 320 + Math.abs(delta) * 40), ArenaMotion.OUT, t -> st.lifeShown = Math.round(ArenaMotion.lerp(from, life, t)));
-            st.lifePop.set(1f);
-            st.lifePop.to(0f, 460);
+            final boolean moving = ArenaTheme.isEffectsOn(); // reduce motion: the figure changes at once, with no pop and no flash of the ring
+            if (moving) {
+                st.lifeRoll = ArenaMotion.play(Math.min(800, 320 + Math.abs(delta) * 40), ArenaMotion.OUT, t -> st.lifeShown = Math.round(ArenaMotion.lerp(from, life, t)));
+                st.lifePop.set(1f);
+                st.lifePop.to(0f, 460);
+                st.lifeFlash.set(1f);
+                st.lifeFlash.to(0f, 560);
+            } else {
+                st.lifeRoll = null;
+                st.lifeShown = life;
+            }
             st.flashLost = delta < 0;
-            st.lifeFlash.set(1f);
-            st.lifeFlash.to(0f, 560);
             st.floatText = (delta > 0 ? "+" : "") + delta;
             st.floatUp.set(0f);
             st.floatUp.to(1f, 1100, 0, ArenaMotion.LINEAR, null);

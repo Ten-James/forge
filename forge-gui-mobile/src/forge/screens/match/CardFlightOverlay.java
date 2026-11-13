@@ -82,9 +82,13 @@ public final class CardFlightOverlay {
     }
 
     public static Style style() {
+        if (forge.screens.match.arena.ArenaTheme.isActive() && !forge.screens.match.arena.ArenaTheme.isEffectsOn()) {
+            enabled = false; // the Arena look with reduce motion on: cards and tokens just appear and go, nothing flies or pops
+            return Style.OFF;
+        }
         String v = FModel.getPreferences().getPref(ForgePreferences.FPref.UI_CARD_PLAY_ANIMATION_STYLE);
         Parsed p = parsed;                       // one read, so raw and style always match
-        if (v == p.raw || (v != null && v.equals(p.raw))) { return p.style; }
+        if (v == p.raw || (v != null && v.equals(p.raw))) { enabled = p.style != Style.OFF; return p.style; }
         Style s = parse(v);
         parsed = new Parsed(v, s);               // allocates only when the setting changes
         enabled = s != Style.OFF;

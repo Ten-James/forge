@@ -208,12 +208,14 @@ public final class ArenaCards {
             }
             statsSeen = stats;
             if (damageSeen >= 0 && damage > damageSeen) {
-                hitFlash.set(1f);
-                hitFlash.to(0f, 380);
-                if (shakeTween != null) {
-                    shakeTween.cancel();
+                if (ArenaTheme.isEffectsOn()) { // reduce motion keeps the number that floats off, not the flash and the jolt
+                    hitFlash.set(1f);
+                    hitFlash.to(0f, 380);
+                    if (shakeTween != null) {
+                        shakeTween.cancel();
+                    }
+                    shakeTween = ArenaMotion.play(300, ArenaMotion.LINEAR, t -> shake = (float) Math.sin(t * Math.PI * 5d) * (1f - t), () -> shake = 0f);
                 }
-                shakeTween = ArenaMotion.play(300, ArenaMotion.LINEAR, t -> shake = (float) Math.sin(t * Math.PI * 5d) * (1f - t), () -> shake = 0f);
                 hitText = "-" + (damage - damageSeen);
                 hitFloat.set(0f);
                 hitFloat.to(1f, 1000, 0, ArenaMotion.LINEAR, null);

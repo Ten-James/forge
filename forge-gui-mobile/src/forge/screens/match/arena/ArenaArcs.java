@@ -39,7 +39,7 @@ public final class ArenaArcs {
         if (!ArenaTheme.isEffectsOn()) {
             return 1f;
         }
-        final float tol = ArenaTheme.px(70);
+        final float tol = ArenaTheme.px(160), near = ArenaTheme.px(30), far = ArenaTheme.px(480);
         final long frame = ArenaMotion.frame(), now = System.nanoTime();
         int free = -1;
         for (int i = 0; i < MEMORY; i++) {
@@ -50,8 +50,12 @@ public final class ArenaArcs {
                 }
                 continue;
             }
-            if (KIND[i] == kind && STAMP[i] != frame && Math.abs(EX1[i] - x1) < tol && Math.abs(EY1[i] - y1) < tol
-                    && Math.abs(EX2[i] - x2) < tol && Math.abs(EY2[i] - y2) < tol) {
+            if (KIND[i] != kind || STAMP[i] == frame) {
+                continue;
+            }
+            final float d1 = Math.max(Math.abs(EX1[i] - x1), Math.abs(EY1[i] - y1)), d2 = Math.max(Math.abs(EX2[i] - x2), Math.abs(EY2[i] - y2));
+            // the same arc when both ends stayed about where they were, or one end stayed put while a layout moved the other
+            if (d1 < tol && d2 < tol || d1 < near && d2 < far || d2 < near && d1 < far) {
                 EX1[i] = x1;
                 EY1[i] = y1;
                 EX2[i] = x2;
@@ -96,7 +100,7 @@ public final class ArenaArcs {
         }
         final float bow = Math.min(len * 0.22f, ArenaTheme.px(220));
         final float cx = (x1 + x2) / 2f + nx * bow, cy = (y1 + y2) / 2f + ny * bow;
-        final float glowR = Math.max(3f, ArenaTheme.px(10)), coreR = Math.max(1.2f, ArenaTheme.px(2.6f));
+        final float glowR = Math.max(4f, ArenaTheme.px(13)), coreR = Math.max(2f, ArenaTheme.px(3.4f)); // a ribbon about px(6) across at its head
         // the discs overlap well, so the core reads as one line
         final int n = Math.max(24, Math.min(420, Math.round(len * 1.15f / (coreR * 1.1f))));
         // a pulse running towards the target, once every 0.9 s
@@ -111,7 +115,7 @@ public final class ArenaArcs {
             final float t = i / (float) n;
             final float u = 1f - t;
             final float px = u * u * x1 + 2 * u * t * cx + t * t * x2, py = u * u * y1 + 2 * u * t * cy + t * t * y2;
-            final float taper = 0.55f + 0.45f * Math.min(1f, t * 4f); // thin where it leaves, full where it arrives
+            final float taper = 0.3f + 0.7f * (float) Math.pow(t, 0.8d); // a ribbon: thin where it leaves, widening all the way to its head
             g.drawSoftShadow(glow, px - glowR * 0.25f * taper, py - glowR * 0.25f * taper, glowR * 0.5f * taper, glowR * 0.5f * taper, glowR * 0.25f * taper, glowR * 0.75f * taper);
         }
         for (int i = 0; i <= last; i++) {
@@ -120,7 +124,7 @@ public final class ArenaArcs {
             final float px = u * u * x1 + 2 * u * t * cx + t * t * x2, py = u * u * y1 + 2 * u * t * cy + t * t * y2;
             final float dist = Math.abs(t - run);
             final float lit = Math.max(0f, 1f - dist / 0.08f);
-            final float taper = 0.55f + 0.45f * Math.min(1f, t * 4f);
+            final float taper = 0.3f + 0.7f * (float) Math.pow(t, 0.8d);
             final float r = coreR * taper * (1f + 0.6f * lit);
             S2.set(c.r + (1f - c.r) * (0.55f + 0.45f * lit), c.g + (1f - c.g) * (0.55f + 0.45f * lit), c.b + (1f - c.b) * (0.55f + 0.45f * lit), 0.9f);
             g.fillSmoothCircle(S2, px, py, r);
@@ -145,9 +149,9 @@ public final class ArenaArcs {
         if (alen > 1f) {
             final float ux = adx / alen, uy = ady / alen, vx = -uy, vy = ux;
             final float tipX = x2 - ux * ring * 1.2f, tipY = y2 - uy * ring * 1.2f;
-            final float arm = ring * 2.1f * arrive, spread = arm * 0.62f;
+            final float arm = ring * 2.5f * arrive, spread = arm * 0.66f;
             final float bx = tipX - ux * arm, by = tipY - uy * arm;
-            final float thick = Math.max(2.5f, ring * 0.5f);
+            final float thick = Math.max(3.5f, ring * 0.62f);
             final Color head = ArenaTheme.mix(c, ArenaTheme.WHITE, 0.5f, S2);
             g.drawLine(thick * 2.4f, ArenaTheme.alpha(c, 0.28f * arrive, S3), bx + vx * spread, by + vy * spread, tipX, tipY);
             g.drawLine(thick * 2.4f, ArenaTheme.alpha(c, 0.28f * arrive, S3), bx - vx * spread, by - vy * spread, tipX, tipY);

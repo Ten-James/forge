@@ -596,6 +596,11 @@ public class MatchController extends NetworkGuiGame {
     }
 
     @Override
+    public void notifyStackResolved(final forge.game.event.GameEventSpellResolved event) {
+        forge.screens.match.arena.ArenaStackFx.resolvedEvent(event); //the Arena look tells a resolved entry from a countered one by this
+    }
+
+    @Override
     public void updateManaPool(final Iterable<PlayerView> manaPoolUpdate) {
         for (final PlayerView p : manaPoolUpdate) {
             view.getPlayerPanel(p).updateManaPool();

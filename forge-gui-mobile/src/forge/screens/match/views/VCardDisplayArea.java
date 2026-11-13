@@ -34,6 +34,7 @@ import forge.screens.match.MatchController;
 import forge.screens.match.MatchScreen;
 import forge.screens.match.arena.ArenaBoard;
 import forge.screens.match.arena.ArenaCards;
+import forge.screens.match.arena.ArenaDrawFlights;
 import forge.screens.match.arena.ArenaFx;
 import forge.screens.match.arena.ArenaMatchLayout;
 import forge.toolbox.FCardPanel;
@@ -1075,6 +1076,7 @@ public abstract class VCardDisplayArea extends VDisplayArea implements ActivateH
         }
 
         public boolean selectCard(boolean selectEntireStack) {
+            ArenaDrawFlights.finish(getCard()); //a touch on a drawn card that is still flying in puts it in its slot
             if (displayArea != null && (getCard().getZone() == ZoneType.Hand || isArenaHandCard()) && screenPos.width > 0) { //a cast flies from where it was shown
                 handStarts.put(getCard().getId(), new Rectangle(screenPos));
             }
@@ -1250,7 +1252,7 @@ public abstract class VCardDisplayArea extends VDisplayArea implements ActivateH
                     st.pointerV = (Forge.mouseMovedY - screenPos.y) / (st.cardHeight > 0 ? st.cardHeight : getHeight());
                 }
                 final float cardH = st.cardHeight > 0 ? st.cardHeight : getHeight();
-                if (ArenaFx.handCardInFlight(g, getCard(), screenPos, cardH, st.fanLean)) {
+                if (ArenaDrawFlights.handCardInFlight(g, getCard(), screenPos, cardH, st.fanLean)) {
                     return; //it is flying in from the library: the effect layer draws it, and a ghost holds its slot
                 }
                 ArenaCards.drawHandCard(g, getCard(), st, isHovered(), 0, 0, getWidth(), cardH);
