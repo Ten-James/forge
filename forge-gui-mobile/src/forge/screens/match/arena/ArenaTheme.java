@@ -126,6 +126,18 @@ public final class ArenaTheme {
         return screen instanceof MatchScreen;
     }
 
+    private static volatile boolean cleanBoard = true, effects = true;
+
+    /** Whether the board is the clean 3D table ({@link ArenaTableBoard}) and not the flagstone mat. Read once per frame by {@link #refresh()}. */
+    public static boolean isCleanBoard() {
+        return cleanBoard;
+    }
+
+    /** Whether the board plays its effects ({@link ArenaFx}, arrows drawing in, draw and cast flights). */
+    public static boolean isEffectsOn() {
+        return effects && active;
+    }
+
     /** Re-reads the preference. Listeners run (on the render thread) when the result changes. */
     public static void refresh() {
         final ForgePreferences prefs = FModel.getPreferences();
@@ -140,6 +152,10 @@ public final class ArenaTheme {
                     e.printStackTrace();
                 }
             }
+        }
+        if (prefs != null) {
+            cleanBoard = prefs.getPrefBoolean(FPref.UI_ARENA_CLEAN_BOARD);
+            effects = prefs.getPrefBoolean(FPref.UI_ARENA_EFFECTS);
         }
         final boolean now = prefOn && !Forge.isMobileAdventureMode && Forge.isLandscapeMode();
         if (now != active) {

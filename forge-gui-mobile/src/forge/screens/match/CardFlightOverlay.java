@@ -127,6 +127,7 @@ public final class CardFlightOverlay {
         private boolean toHidden;   // ENTER: destination is scrolled out of view, so the flight stops at the edge and fades out
         private boolean fromHidden; // ENTER: a moved card started out of view, so the flight fades in from the edge
         private boolean cardShaped; // LEAVE on the Arena board: it leaves from the stack's large card, not a tile
+        private boolean rippled;    // ENTER on the Arena board: the ring of light where it landed has been started
 
         private Flight(CardView card, Rectangle from, boolean fromExact, Rectangle to, float tappedAngle, boolean leave) {
             this.card = card; this.from = from; this.fromExact = fromExact; this.to = to;
@@ -380,6 +381,11 @@ public final class CardFlightOverlay {
 
     private static void drawEnterArena(Graphics g, Flight f, float t) {
         final forge.screens.match.views.VCardDisplayArea.CardAreaPanel panel = forge.screens.match.views.VCardDisplayArea.CardAreaPanel.peek(f.card);
+        if (!f.rippled && t >= (f.style == Style.POPUP ? 0.5f : 0.75f)) { //it has landed: a ring of light spreads from the tile
+            f.rippled = true;
+            forge.screens.match.arena.ArenaFx.ripple(f.to.x + f.to.width / 2f, f.to.y + f.to.height / 2f, Math.max(f.to.width, f.to.height) * 0.85f,
+                    forge.screens.match.arena.ArenaFx.colorOf(f.card, new Color()));
+        }
         if (f.style == Style.POPUP) { //a token: it appears in place, growing with a small overshoot
             final float e = Interpolation.swingOut.apply(t);
             final float alpha = Math.min(1f, t * 3f);

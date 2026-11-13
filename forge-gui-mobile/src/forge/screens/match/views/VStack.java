@@ -44,6 +44,7 @@ import forge.screens.match.TargetingOverlay;
 import forge.screens.match.arena.ArenaArt;
 import forge.screens.match.arena.ArenaBoard;
 import forge.screens.match.arena.ArenaCards;
+import forge.screens.match.arena.ArenaFx;
 import forge.screens.match.arena.ArenaMatchLayout;
 import forge.screens.match.arena.ArenaMotion;
 import forge.screens.match.arena.ArenaTheme;
@@ -131,7 +132,29 @@ public class VStack extends FDropDown {
     private final Map<Integer, CardView> arenaShownSpells = new HashMap<>();
     private final Map<Integer, Rectangle> arenaShownRects = new HashMap<>();
 
+    // every entry the Arena stack showed (a spell or an ability), by stack item id: one that is gone sparks where it stood
+    private final Map<Integer, CardView> arenaShownItems = new HashMap<>();
+    private final Map<Integer, Rectangle> arenaShownItemRects = new HashMap<>();
+
+    private void arenaSparkResolved(FCollectionView<StackItemView> stack) {
+        if (arenaShownItems.isEmpty()) {
+            return;
+        }
+        final Set<Integer> stillItems = new HashSet<>();
+        for (StackItemView item : stack) {
+            stillItems.add(item.getId());
+        }
+        for (Map.Entry<Integer, CardView> e : arenaShownItems.entrySet()) {
+            if (!stillItems.contains(e.getKey())) {
+                ArenaFx.stackEntryGone(e.getKey(), e.getValue(), arenaShownItemRects.get(e.getKey()));
+            }
+        }
+        arenaShownItems.clear();
+        arenaShownItemRects.clear();
+    }
+
     private void arenaSendOffLeavers(FCollectionView<StackItemView> stack) {
+        arenaSparkResolved(stack);
         if (arenaShownSpells.isEmpty()) {
             return;
         }
@@ -774,6 +797,17 @@ public class VStack extends FDropDown {
                 CardFlightOverlay.noteStackRect(sourceCard.getId(), screenPos.x, screenPos.y, w, h);
                 arenaShownSpells.put(sourceCard.getId(), sourceCard);
                 arenaShownRects.computeIfAbsent(sourceCard.getId(), k -> new Rectangle()).set(screenPos.x, screenPos.y, w, h);
+            }
+            if (ArenaTheme.isEffectsOn()) { //it flies in from where it was cast or activated; the effect layer draws it until it lands here
+                final int id = stackInstance.getId();
+                arenaShownItems.put(id, sourceCard);
+                arenaShownItemRects.computeIfAbsent(id, k -> new Rectangle()).set(screenPos.x, screenPos.y, w, h);
+                ArenaFx.stackEntryShown(id, sourceCard, stackInstance.getActivatingPlayer(), stackInstance.isAbility(), screenPos,
+                        stackInstance.isAbility() ? null : VCardDisplayArea.CardAreaPanel.peekHandStart(sourceCard));
+                if (ArenaFx.isFlying(id)) {
+                    ArenaFx.retarget(id, screenPos.x, screenPos.y, w, h);
+                    return;
+                }
             }
             final boolean top = activeItem == this;
             final boolean pickable = isSelectableTarget();

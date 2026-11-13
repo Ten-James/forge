@@ -34,6 +34,7 @@ import forge.screens.match.MatchController;
 import forge.screens.match.MatchScreen;
 import forge.screens.match.arena.ArenaBoard;
 import forge.screens.match.arena.ArenaCards;
+import forge.screens.match.arena.ArenaFx;
 import forge.screens.match.arena.ArenaMatchLayout;
 import forge.toolbox.FCardPanel;
 import forge.toolbox.FDisplayObject;
@@ -745,6 +746,10 @@ public abstract class VCardDisplayArea extends VDisplayArea implements ActivateH
         private static final Set<Integer> animatedIds = Sets.newConcurrentHashSet();
         private static final Set<Integer> movedIds = Sets.newConcurrentHashSet();
         public static void markMoved(CardView c) { movedIds.add(c.getId()); }
+        /** Where the card was in the hand when it was played, without taking it (a cast spell's flight onto the stack reads it). */
+        public static Rectangle peekHandStart(CardView card) {
+            return handStarts.get(card.getId());
+        }
         public static Rectangle takeHandStart(CardView card) {
             return handStarts.remove(card.getId());
         }
@@ -826,6 +831,7 @@ public abstract class VCardDisplayArea extends VDisplayArea implements ActivateH
             handStarts.clear();
             animatedIds.clear();
             CardFlightOverlay.clear();
+            ArenaFx.clear();
             for (CardAreaPanel p : allCardPanels.values()) {
                 p.flight = null;
                 p.entryStart = -1;
@@ -854,6 +860,7 @@ public abstract class VCardDisplayArea extends VDisplayArea implements ActivateH
             handStarts.clear();
             animatedIds.clear();
             CardFlightOverlay.clear();
+            ArenaFx.clear();
             generation++; // field rows drop their remembered board on their next refresh
         }
 
@@ -1242,7 +1249,11 @@ public abstract class VCardDisplayArea extends VDisplayArea implements ActivateH
                     st.pointerU = (Forge.mouseMovedX - screenPos.x) / getWidth();
                     st.pointerV = (Forge.mouseMovedY - screenPos.y) / (st.cardHeight > 0 ? st.cardHeight : getHeight());
                 }
-                ArenaCards.drawHandCard(g, getCard(), st, isHovered(), 0, 0, getWidth(), st.cardHeight > 0 ? st.cardHeight : getHeight());
+                final float cardH = st.cardHeight > 0 ? st.cardHeight : getHeight();
+                if (ArenaFx.claimDraw(getCard(), screenPos, cardH, st)) {
+                    return; //it is flying in from the library: the effect layer draws it until it lands in this slot
+                }
+                ArenaCards.drawHandCard(g, getCard(), st, isHovered(), 0, 0, getWidth(), cardH);
                 return;
             }
             if (displayArea != null && displayArea.rotateCards180) {

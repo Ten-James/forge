@@ -66,12 +66,14 @@ import forge.player.PlayerZoneUpdate;
 import forge.screens.FScreen;
 import forge.screens.match.arena.ArenaBoardPainter;
 import forge.screens.match.arena.ArenaCardSizeSlider;
+import forge.screens.match.arena.ArenaFx;
 import forge.screens.match.arena.ArenaCornerMenu;
 import forge.screens.match.arena.ArenaMatchLayout;
 import forge.screens.match.arena.ArenaPlayerInfo;
 import forge.screens.match.arena.ArenaTheme;
 import forge.screens.match.arena.ArenaShortcutSheet;
 import forge.screens.match.arena.ArenaShortcuts;
+import forge.screens.match.arena.ArenaTableBoard;
 import forge.screens.match.arena.ArenaTurnBanner;
 import forge.screens.match.views.VCardDisplayArea.CardAreaPanel;
 import forge.screens.match.views.VPhaseIndicator.PhaseLabel;
@@ -991,6 +993,7 @@ public class MatchScreen extends FScreen {
         }
         drawArcs(g);
         CardFlightOverlay.draw(g, bottomPlayerPanel.getPlayer(), getHeight());
+        ArenaFx.draw(g);
         if (arenaLaidOut && isArenaBoard() && bottomPlayerPrompt.isVisible() && arenaPromptMode == ArenaMatchLayout.PromptMode.DECISION) {
             bottomPlayerPrompt.drawLate(g); //a decision above the arcs: they never run through its words
         }
@@ -1653,6 +1656,7 @@ public class MatchScreen extends FScreen {
         CardAreaPanel.resetForNewGame();
         forge.screens.match.arena.ArenaCardPreview.clear();
         forge.screens.match.arena.ArenaTurnBanner.clear();
+        ArenaFx.clear();
         forge.screens.match.arena.ArenaBoard.clearGameCaches(); //what one game made (names, defenders) starts afresh
         for (VPlayerPanel playerPanel : getPlayerPanels().values()) {
             for (CardAreaPanel p : playerPanel.getField().getCardPanels()) {
@@ -1821,7 +1825,11 @@ public class MatchScreen extends FScreen {
                 final String dayTime = MatchController.instance.getDayTime();
                 final ArenaTheme.BoardVariant variant = "Day".equalsIgnoreCase(dayTime) ? ArenaTheme.BoardVariant.DAY
                         : "Night".equalsIgnoreCase(dayTime) ? ArenaTheme.BoardVariant.NIGHT : ArenaTheme.BoardVariant.DEFAULT;
-                ArenaBoardPainter.draw(g, 0, 0, getWidth(), getHeight(), variant);
+                if (ArenaTheme.isCleanBoard()) {
+                    ArenaTableBoard.draw(g, 0, 0, getWidth(), getHeight(), variant);
+                } else {
+                    ArenaBoardPainter.draw(g, 0, 0, getWidth(), getHeight(), variant);
+                }
                 return;
             }
             super.drawBackground(g);

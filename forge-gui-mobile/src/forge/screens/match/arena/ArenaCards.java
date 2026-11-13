@@ -123,6 +123,8 @@ public final class ArenaCards {
         private final Color[] chipColor = {new Color(), new Color(), new Color()};
         private int chips;
 
+        /** Set by {@link ArenaFx#claimDraw}: whether the card has been looked at once for having just been drawn. */
+        public boolean drawChecked;
         /** Set by the hand fan: how far the card leans (degrees, clockwise) and whether it is the raised one. */
         public float fanLean;
         public boolean raised;
