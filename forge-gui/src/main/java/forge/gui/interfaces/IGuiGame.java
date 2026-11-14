@@ -120,6 +120,8 @@ public interface IGuiGame {
 
     default void notifyStackAddition(final GameEventSpellAbilityCast event) {}
     default void notifyStackRemoval(final GameEventSpellRemovedFromStack event) {}
+    /** A spell or ability finished resolving (it did not fizzle unless the event says so): a stack entry that goes without this was countered. */
+    default void notifyStackResolved(final forge.game.event.GameEventSpellResolved event) {}
 
     default void handleLandPlayed(CardView land) {}
 

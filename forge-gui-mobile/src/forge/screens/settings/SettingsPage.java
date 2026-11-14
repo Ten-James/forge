@@ -751,6 +751,12 @@ public class SettingsPage extends TabPage<SettingsScreen> {
                     ArenaTheme.refresh();
                 }
             }, 4);
+        lstSettings.addItem(new BooleanSetting(FPref.UI_ARENA_CLEAN_BOARD,
+            Forge.getLocalizer().getMessage("lblArenaCleanBoard"),
+            Forge.getLocalizer().getMessage("nlArenaCleanBoard")), 4);
+        lstSettings.addItem(new BooleanSetting(FPref.UI_ARENA_EFFECTS,
+            Forge.getLocalizer().getMessage("lblArenaEffects"),
+            Forge.getLocalizer().getMessage("nlArenaEffects")), 4);
         lstSettings.addItem(new BooleanSetting(FPref.UI_MATCH_IMAGE_VISIBLE,
             Forge.getLocalizer().getMessage("lblShowMatchBackground"),
             Forge.getLocalizer().getMessage("nlShowMatchBackground")), 4);

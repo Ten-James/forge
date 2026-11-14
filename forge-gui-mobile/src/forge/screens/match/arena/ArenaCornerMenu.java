@@ -8,6 +8,7 @@ import forge.Graphics;
 import forge.assets.FSkinImage;
 import forge.localinstance.properties.ForgePreferences;
 import forge.menu.FDropDown;
+import forge.menu.FCheckBoxMenuItem;
 import forge.menu.FMenuItem;
 import forge.menu.FPopupMenu;
 import forge.screens.match.MatchController;
@@ -135,6 +136,13 @@ public final class ArenaCornerMenu extends FDisplayObject {
                     FSkinImage.HDLIBRARY, e -> toggleLog()));
             addItem(new FMenuItem(Forge.getLocalizer().getMessage("lblStack") + "  [" + ArenaShortcuts.keyLabels(ArenaShortcuts.Action.OPEN_STACK) + "]",
                     FSkinImage.HDEXILE, e -> toggleStack()));
+            // the F2 shortcut for a touch screen: only while there is something to pass on
+            final FMenuItem passStack = new FMenuItem(Forge.getLocalizer().getMessageorUseDefault("lblArenaKeyPassStack", "Pass until the stack resolves")
+                    + "  [" + ArenaShortcuts.keyLabels(ArenaShortcuts.Action.PASS_UNTIL_STACK_RESOLVES) + "]", FSkinImage.HDCHOICE,
+                    e -> screen.passUntilStackResolves());
+            final forge.game.GameView game = MatchController.instance.getGameView();
+            passStack.setEnabled(game != null && !game.getStack().isEmpty());
+            addItem(passStack);
             if (!MatchController.instance.getRevealedCards().isEmpty()) { //what has been revealed this game (the menu bar's reveal tab)
                 addItem(new FMenuItem(Forge.getLocalizer().getMessage("lblRevealed") + " (" + MatchController.instance.getRevealedCards().size() + ")",
                         FSkinImage.HDLIBRARY, e -> openDropDown(screen.getRevealed())));
@@ -145,6 +153,13 @@ public final class ArenaCornerMenu extends FDisplayObject {
             if (ForgePreferences.DEV_MODE && !MatchController.instance.isReplay()) {
                 addItem(new FMenuItem(Forge.getLocalizer().getMessage("lblDev"), FSkinImage.SETTINGS, e -> openDropDown(screen.getDevMenu())));
             }
+            // reduce motion, within reach in a match: flights, sparks, arrows drawing in and everything that breathes
+            addItem(new FCheckBoxMenuItem(Forge.getLocalizer().getMessage("lblArenaEffects"), ArenaTheme.isEffectsOn(), e -> {
+                final forge.localinstance.properties.ForgePreferences prefs = forge.model.FModel.getPreferences();
+                prefs.setPref(forge.localinstance.properties.ForgePreferences.FPref.UI_ARENA_EFFECTS, !ArenaTheme.isEffectsOn());
+                prefs.save();
+                ArenaTheme.refresh();
+            }));
             addItem(new FMenuItem(Forge.getLocalizer().getMessageorUseDefault("lblArenaGdxShortcuts", "Keyboard shortcuts")
                     + "  [" + ArenaShortcuts.keyLabels(ArenaShortcuts.Action.SHOW_SHORTCUTS) + "]", FSkinImage.HDCHOICE, e -> ArenaShortcutSheet.open()));
         }

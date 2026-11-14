@@ -119,36 +119,57 @@ public final class ArenaMotion {
         final long step = running && wasRunning ? Math.min(now - lastTick, LONGEST_STEP_NANOS) : 0L;
         lastTick = now;
         frameStep = step / 1e9f;
-        if (!tweens.isEmpty()) {
-            // finishing one animation may start another, which waits for the next frame
-            final Tween[] now0 = tweens.toArray(new Tween[0]);
-            for (final Tween tween : now0) {
-                boolean on;
-                try {
-                    on = tween.advance(step);
-                } catch (final RuntimeException e) {
-                    // only for show: no reason to take the game down with it
-                    e.printStackTrace();
-                    tween.cancel();
-                    on = false;
-                }
-                if (!on) {
-                    tweens.remove(tween);
-                }
-            }
-        }
-        if (!springs.isEmpty()) {
-            final Spring[] now1 = springs.toArray(new Spring[0]);
-            for (final Spring s : now1) {
-                if (!s.advance(step / 1e9f)) {
-                    springs.remove(s);
-                    s.registered = false;
-                }
-            }
-        }
+        advanceTweens(step);
+        advanceSprings(step / 1e9f);
         wasRunning = isRunning();
         if (wasRunning) {
             requestFrame();
+        }
+    }
+
+    /** Advances every tween in place (no per-frame copy): the ones that finish are squeezed out, the ones started meanwhile wait for the next frame. */
+    private static void advanceTweens(final long step) {
+        final int n = tweens.size();
+        if (n == 0) {
+            return;
+        }
+        int keep = 0;
+        for (int i = 0; i < n; i++) {
+            final Tween tween = tweens.get(i);
+            boolean on;
+            try {
+                on = tween.advance(step);
+            } catch (final RuntimeException e) {
+                // only for show: no reason to take the game down with it
+                e.printStackTrace();
+                tween.cancel();
+                on = false;
+            }
+            if (on) {
+                tweens.set(keep++, tween);
+            }
+        }
+        if (keep < n) {
+            tweens.subList(keep, n).clear();
+        }
+    }
+
+    private static void advanceSprings(final float seconds) {
+        final int n = springs.size();
+        if (n == 0) {
+            return;
+        }
+        int keep = 0;
+        for (int i = 0; i < n; i++) {
+            final Spring s = springs.get(i);
+            if (s.advance(seconds)) {
+                springs.set(keep++, s);
+            } else {
+                s.registered = false;
+            }
+        }
+        if (keep < n) {
+            springs.subList(keep, n).clear();
         }
     }
 
@@ -198,18 +219,50 @@ public final class ArenaMotion {
 
     /**
      * For a view to call as it draws something that breathes: how far through its slow cycle that is, 0..1 (a sine),
-     * and a request for another frame. Nothing needs starting or stopping: once a view stops drawing it (hidden,
+     * and a request for another frame (with the Arena effects setting off, which is the reduce-motion switch, it is a
+     * constant 1 and asks for nothing). Nothing needs starting or stopping: once a view stops drawing it (hidden,
      * gone), it costs nothing. While something breathes the board renders at the display rate.
      */
     public static float pulse(final float seconds) {
-        requestFrame();
+        if (!ArenaTheme.isEffectsOn()) {
+            return 1f; // reduce motion: whatever breathes stays lit and asks for no frames
+        }
+        requestPulseFrame();
         return (float) (0.5d + 0.5d * Math.sin((System.nanoTime() - START) / 1e9d / seconds * 2d * Math.PI));
     }
 
     /** {@link #pulse(float)} with a phase offset (0..1), so neighbours do not breathe in step. */
     public static float pulse(final float seconds, final float phase) {
-        requestFrame();
+        if (!ArenaTheme.isEffectsOn()) {
+            return 1f;
+        }
+        requestPulseFrame();
         return (float) (0.5d + 0.5d * Math.sin(((System.nanoTime() - START) / 1e9d / seconds + phase) * 2d * Math.PI));
+    }
+
+    /** How often a view that only breathes (nothing else moving) gets a frame: about 30 times a second, whatever the display's rate. */
+    private static final float PULSE_FRAME_SECONDS = 1f / 30f;
+    private static volatile boolean pulseFrameArmed;
+    private static final com.badlogic.gdx.utils.Timer.Task PULSE_FRAME = new com.badlogic.gdx.utils.Timer.Task() {
+        @Override
+        public void run() {
+            pulseFrameArmed = false;
+            requestFrame();
+        }
+    };
+
+    /**
+     * The frame request of something that only breathes. While tweens, springs or holds run, frames come at the display
+     * rate anyway and this asks for one at once; otherwise the next frame is scheduled about a thirtieth of a second
+     * ahead, so a slow pulse costs a 144 or 240 Hz monitor (and a laptop's battery) no more than 30 frames a second.
+     */
+    private static void requestPulseFrame() {
+        if (isRunning()) {
+            requestFrame();
+        } else if (!pulseFrameArmed) {
+            pulseFrameArmed = true;
+            com.badlogic.gdx.utils.Timer.schedule(PULSE_FRAME, PULSE_FRAME_SECONDS);
+        }
     }
 
     private static boolean onRenderThread() {

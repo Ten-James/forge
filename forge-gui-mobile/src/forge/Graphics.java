@@ -2531,6 +2531,126 @@ public class Graphics implements Disposable {
         drawArenaShape(SHAPE_SOFT, x, y, w, h, radius, blur, color, color, true);
     }
 
+    // ---- rotated and stretched shapes (arrows, sparks, shards) -------------------------------------------------------
+
+    private float[] ribbonVerts = new float[0];
+    private static final float OPEN_END = 0.001f;
+
+    private void putQuadVertex(final float[] v, final int o, final float x, final float y, final float colorBits, final float u, final float w) {
+        v[o] = adjustX(x);
+        v[o + 1] = adjustY(y, 0);
+        v[o + 2] = colorBits;
+        v[o + 3] = u;
+        v[o + 4] = w;
+    }
+
+    /**
+     * One antialiased rounded rectangle at any angle, through the Arena shader (the edges are measured on screen, so
+     * they stay smooth under rotation). {@code halfLength} runs along the angle, {@code halfWidth} across; a radius of
+     * {@code halfWidth} makes a capsule.
+     */
+    public void fillSmoothRotatedRect(final Color color, final float cx, final float cy, final float halfLength, final float halfWidth, final float radians,
+            final float radius) {
+        if (halfLength <= 0 || halfWidth <= 0 || !batch.isDrawing()) {
+            return;
+        }
+        if (!useArenaShader()) {
+            fillCircle(color, cx, cy, halfWidth); // no shader: a dot is the closest plain shape
+            return;
+        }
+        final float m = Math.min(halfLength, halfWidth);
+        final int a = Math.round(Math.min(1f, Math.max(0f, radius) / m) * 1023f);
+        final float uBase = -4f * (a + 1), vBase = -4f; // mode 0 (fill), no amount
+        final float cos = (float) Math.cos(radians), sin = (float) Math.sin(radians);
+        final float lx = cos * halfLength, ly = sin * halfLength, wx = -sin * halfWidth, wy = cos * halfWidth;
+        shapeC1.set(color.r, color.g, color.b, alphaComposite < 1 ? color.a * alphaComposite : color.a);
+        final float bits = shapeC1.toFloatBits();
+        final float[] v = shapeVerts;
+        putQuadVertex(v, 0, cx - lx - wx, cy - ly - wy, bits, uBase - 1f, vBase - 1f);
+        putQuadVertex(v, 5, cx - lx + wx, cy - ly + wy, bits, uBase - 1f, vBase + 1f);
+        putQuadVertex(v, 10, cx + lx + wx, cy + ly + wy, bits, uBase + 1f, vBase + 1f);
+        putQuadVertex(v, 15, cx + lx - wx, cy + ly - wy, bits, uBase + 1f, vBase - 1f);
+        flushShapeVerts(1);
+    }
+
+    /** A straight antialiased stroke with round ends, {@code width} across (the smooth replacement for {@link #drawLine}). */
+    public void fillSmoothCapsule(final Color color, final float x1, final float y1, final float x2, final float y2, final float width) {
+        final float dx = x2 - x1, dy = y2 - y1, len = (float) Math.sqrt(dx * dx + dy * dy), hw = Math.max(0.5f, width / 2f);
+        fillSmoothRotatedRect(color, (x1 + x2) / 2f, (y1 + y2) / 2f, len / 2f + hw, hw, (float) Math.atan2(dy, dx), hw);
+    }
+
+
+    private final float[] wedgeXY = new float[4], wedgeHW = new float[2], wedgeRGBA = new float[8];
+
+    /**
+     * A solid antialiased isosceles triangle: its point at tipX, tipY and its base, {@code halfBase} wide each way,
+     * centred on baseX, baseY (an arrow head, a shard). The base edge itself is cut square, not smoothed.
+     */
+    public void fillSmoothWedge(final Color color, final float baseX, final float baseY, final float tipX, final float tipY, final float halfBase) {
+        wedgeXY[0] = baseX;
+        wedgeXY[1] = baseY;
+        wedgeXY[2] = tipX;
+        wedgeXY[3] = tipY;
+        wedgeHW[0] = halfBase;
+        wedgeHW[1] = 0.3f;
+        for (int i = 0; i < 2; i++) {
+            wedgeRGBA[i * 4] = color.r;
+            wedgeRGBA[i * 4 + 1] = color.g;
+            wedgeRGBA[i * 4 + 2] = color.b;
+            wedgeRGBA[i * 4 + 3] = color.a;
+        }
+        fillSmoothRibbon(wedgeXY, wedgeHW, wedgeRGBA, 2);
+    }
+    /**
+     * A solid antialiased ribbon along a path: one quad per step, sharing their corners (so there are no seams and no
+     * overdraw, and a translucent ribbon is even). Its edges are smooth at any angle; its two ends are cut square.
+     *
+     * @param xy        {@code n} points, x then y
+     * @param halfWidth half the ribbon's width at each point
+     * @param rgba      {@code n} colours, r g b a each (the alpha composite is applied here); blended along the way
+     */
+    public void fillSmoothRibbon(final float[] xy, final float[] halfWidth, final float[] rgba, final int n) {
+        if (n < 2 || !batch.isDrawing()) {
+            return;
+        }
+        if (!useArenaShader()) {
+            return;
+        }
+        final int pieces = n - 1;
+        if (ribbonVerts.length < pieces * 20) {
+            ribbonVerts = new float[pieces * 20];
+        }
+        final float[] v = ribbonVerts;
+        // the sides at each point: perpendicular to the path there (the average of its two steps)
+        float prevLx = 0, prevLy = 0, prevRx = 0, prevRy = 0, prevBits = 0;
+        final float uBase = -4f, vBase = -4f;
+        for (int i = 0; i < n; i++) {
+            final int a = Math.max(0, i - 1), b = Math.min(n - 1, i + 1);
+            float tx = xy[b * 2] - xy[a * 2], ty = xy[b * 2 + 1] - xy[a * 2 + 1];
+            final float tl = Math.max(1e-4f, (float) Math.sqrt(tx * tx + ty * ty));
+            tx /= tl;
+            ty /= tl;
+            final float hw = Math.max(0.3f, halfWidth[i]);
+            final float lx = xy[i * 2] - ty * hw, ly = xy[i * 2 + 1] + tx * hw, rx = xy[i * 2] + ty * hw, ry = xy[i * 2 + 1] - tx * hw;
+            shapeC1.set(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], rgba[i * 4 + 3] * alphaComposite);
+            final float bits = shapeC1.toFloatBits();
+            if (i > 0) {
+                final int o = (i - 1) * 20;
+                // across the ribbon nx runs -1..1 (the edges are antialiased), along it only by a hair (no soft ends)
+                putQuadVertex(v, o, prevLx, prevLy, prevBits, uBase - 1f, vBase - OPEN_END);
+                putQuadVertex(v, o + 5, prevRx, prevRy, prevBits, uBase + 1f, vBase - OPEN_END);
+                putQuadVertex(v, o + 10, rx, ry, bits, uBase + 1f, vBase + OPEN_END);
+                putQuadVertex(v, o + 15, lx, ly, bits, uBase - 1f, vBase + OPEN_END);
+            }
+            prevLx = lx;
+            prevLy = ly;
+            prevRx = rx;
+            prevRy = ry;
+            prevBits = bits;
+        }
+        batch.draw(getWhiteTexture(), v, 0, pieces * 20);
+    }
+
     /**
      * Plain (square) rectangle with a multi-stop gradient, batched with the default shader: {@code colors[i]} at
      * {@code stops[i]} (0..1, ascending) along the width (horizontal) or height (vertical).

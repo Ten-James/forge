@@ -512,7 +512,7 @@ public final class ArenaCardBrowser extends ArenaDialogOverlay {
         ArenaDialogKit.placeButtons(w, h, btnSubmit, btnSecondary);
         if (search != null) { //top left, level with the title, as View Battlefield is top right
             final float sh = ArenaDialogKit.buttonH(h);
-            search.setFont(ArenaTheme.fontPx(Math.max(8, Math.round(sh * 0.42f / 2f) * 2)));
+            search.setFont(ArenaTheme.fontPx(Math.round(sh * 0.42f / 2f) * 2));
             search.setBounds(Math.round(w * 0.024f), Math.round(h * 0.09f) - sh / 2f, Math.round(w * 0.17f), sh);
         }
         if (mode == Mode.ARRANGE) {
@@ -810,7 +810,7 @@ public final class ArenaCardBrowser extends ArenaDialogOverlay {
             drawFocus(g, focus, dx, h, alpha);
         }
         if (search != null && items.isEmpty() && noMatchText != null) { //the search found nothing: say so where the cards would be
-            final FSkinFont f = ArenaTheme.fontPx(Math.max(8, Math.round(h * 0.03f / 2f) * 2));
+            final FSkinFont f = ArenaTheme.fontPx(Math.round(h * 0.03f / 2f) * 2);
             final float lh = f.getLineHeight();
             ArenaArt.textShadowed(g, noMatchText, f,
                     ArenaTheme.alpha(ArenaTheme.TEXT, alpha, S1), 0, Math.round(h * ArenaDialogKit.ROW_CENTRE_Y) - lh / 2f, w, lh, Align.center);

@@ -221,7 +221,7 @@ public class VPrompt extends FContainer {
 
     @Override
     public void draw(Graphics g) {
-        if (isArenaPrompt() && arena.mode == ArenaMatchLayout.PromptMode.DECISION && !arenaLateDraw) {
+        if (isArenaPrompt() && arena.mode != null && !arenaLateDraw) {
             return; //drawn by the match screen after the arcs
         }
         super.draw(g);
@@ -347,7 +347,11 @@ public class VPrompt extends FContainer {
             return;
         }
         final String label = ok ? ArenaPromptText.okLabel(button.getText()) : ArenaPromptText.cancelLabel(button.getText(), card);
-        ArenaPrompt.drawButton(g, label, button.getWidth(), button.getHeight(), ok, button.isHovered(), held, button.isEnabled(), alpha);
+        final boolean asked = !ok && button.isEnabled() && ArenaPrompt.isBackOutAsked(); //a right click on the empty board asked to cancel: the button says what to do next
+        ArenaPrompt.drawButton(g, label, button.getWidth(), button.getHeight(), ok, button.isHovered() || asked, held, button.isEnabled(), alpha);
+        if (asked) {
+            ArenaPrompt.drawHintAbove(g, ArenaPrompt.backOutHint(), button);
+        }
     }
 
     public FButton getBtnCancel() {

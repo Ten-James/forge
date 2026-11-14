@@ -48,6 +48,7 @@ public final class CardFlightOverlay {
     private static final boolean LEAVE_TINT = false;  // flash a color over a destroyed card (see TINT below)
     private static final int MAX_FLIGHTS = GuiBase.isAndroid() ? 4 : 6;          // simultaneous ENTER flights
     private static final int MAX_LEAVE_FLIGHTS = GuiBase.isAndroid() ? 6 : 12;   // simultaneous LEAVE flights (board wipes); extra cards just disappear
+    private static final long HOLD_MOST_NANOS = 1_000_000_000L; // a held flight waits this long at the most
     private static final long LEAVE_STAGGER_NANOS = 35_000_000L;     // delay between cards of one wipe
     private static final long LEAVE_BATCH_GAP_NANOS = 150_000_000L;  // departures closer together than this belong to one wipe          // extra simultaneous flights are skipped
     private static final boolean TOKENS_POPUP = true; // tokens always use the popup style (unless animations are off)
@@ -82,9 +83,13 @@ public final class CardFlightOverlay {
     }
 
     public static Style style() {
+        if (forge.screens.match.arena.ArenaTheme.isActive() && !forge.screens.match.arena.ArenaTheme.isEffectsOn()) {
+            enabled = false; // the Arena look with reduce motion on: cards and tokens just appear and go, nothing flies or pops
+            return Style.OFF;
+        }
         String v = FModel.getPreferences().getPref(ForgePreferences.FPref.UI_CARD_PLAY_ANIMATION_STYLE);
         Parsed p = parsed;                       // one read, so raw and style always match
-        if (v == p.raw || (v != null && v.equals(p.raw))) { return p.style; }
+        if (v == p.raw || (v != null && v.equals(p.raw))) { enabled = p.style != Style.OFF; return p.style; }
         Style s = parse(v);
         parsed = new Parsed(v, s);               // allocates only when the setting changes
         enabled = s != Style.OFF;
@@ -110,7 +115,7 @@ public final class CardFlightOverlay {
         private final boolean fromExact; // ENTER only: true if 'from' is already the card's exact rect (stack thumbnail)
         private final Rectangle to;      // ENTER only: destination panel rect
         private final boolean leave;
-        private final long startNanos = TimeUtils.nanoTime();
+        private long startNanos = TimeUtils.nanoTime();
         private final float tappedAngle;
 
         private float durationNanos;
@@ -127,6 +132,12 @@ public final class CardFlightOverlay {
         private boolean toHidden;   // ENTER: destination is scrolled out of view, so the flight stops at the edge and fades out
         private boolean fromHidden; // ENTER: a moved card started out of view, so the flight fades in from the edge
         private boolean cardShaped; // LEAVE on the Arena board: it leaves from the stack's large card, not a tile
+        private boolean rippled;    // ENTER on the Arena board: the ring of light where it landed has been started
+        private boolean held;       // LEAVE on the Arena board: waits at its start until it is known where it goes (a countered spell does not fly)
+        private long heldAt;
+        private PlayerView destOwner; // LEAVE: whose pile it flies to; the pile holds the card back until it lands
+        private ZoneType destZone;    // (found out on the first look when not known)
+        private float progress;       // how far along it was last drawn, 0..1
 
         private Flight(CardView card, Rectangle from, boolean fromExact, Rectangle to, float tappedAngle, boolean leave) {
             this.card = card; this.from = from; this.fromExact = fromExact; this.to = to;
@@ -213,6 +224,7 @@ public final class CardFlightOverlay {
         lastLeaveStartNanos = now;
 
         Flight f = new Flight(card, fromPanel, false, null, tappedAngle, true);
+        f.destOwner = card.getOwner();
         f.delayNanos = leaveBatchIndex * LEAVE_STAGGER_NANOS;
         leaveBatchIndex++;
         flights.add(f);
@@ -223,12 +235,57 @@ public final class CardFlightOverlay {
      * The Arena board: a spell that left the stack for its owner's graveyard (resolved, countered) or any other pile
      * flies there from the large card the stack showed it as.
      */
-    public static void startArenaStackLeave(CardView card, Rectangle fromCard) {
-        if (countFlights(true) >= MAX_LEAVE_FLIGHTS || style() == Style.OFF) { return; }
+    public static Flight startArenaStackLeave(CardView card, Rectangle fromCard) {
+        if (countFlights(true) >= MAX_LEAVE_FLIGHTS || style() == Style.OFF) { return null; }
         Flight f = new Flight(card, new Rectangle(fromCard), true, null, 0f, true);
         f.cardShaped = true;
+        f.destOwner = card.getOwner();
         flights.add(f);
         Gdx.graphics.requestRendering();
+        return f;
+    }
+
+    /** Makes the flight wait at its start (render thread) until {@link #release} or {@link #cancel}; it lets go by itself after a second. */
+    public static void hold(Flight f) {
+        if (f != null) {
+            f.held = true;
+            f.heldAt = TimeUtils.nanoTime();
+        }
+    }
+
+    /** Lets a held flight go. */
+    public static void release(Flight f) {
+        if (f != null && f.held) {
+            f.held = false;
+            f.startNanos = TimeUtils.nanoTime();
+            Gdx.graphics.requestRendering();
+        }
+    }
+
+    /** Drops a flight that turned out not to be one (a countered spell shatters instead of flying to its pile). */
+    public static void cancel(Flight f) {
+        if (f != null) {
+            f.cancelled = true;
+            f.held = false;
+            Gdx.graphics.requestRendering();
+        }
+    }
+
+    /**
+     * How many cards are on their way to this player's pile (or hand) from the board or the stack and not shown there
+     * yet. Piles hold them back until they land (see {@code ArenaFx.inboundTo}).
+     */
+    public static int inboundTo(PlayerView owner, ZoneType zone) {
+        int n = 0;
+        for (int i = 0; i < flights.size(); i++) {
+            final Flight f = flights.get(i);
+            if (!f.leave || f.done || f.cancelled || f.destOwner != owner || f.progress >= LANDED) { continue; }
+            if (f.destZone == null) {
+                f.destZone = zoneOf(f.card);
+            }
+            if (f.destZone == zone) { n++; }
+        }
+        return n;
     }
 
     private static int countFlights(boolean leave) {
@@ -378,31 +435,42 @@ public final class CardFlightOverlay {
         f.resolved = true;
     }
 
+    /** Scratch rectangles for the shared flight drawing (render thread only). */
+    private static final Rectangle POSE_FROM = new Rectangle(), POSE_TO = new Rectangle();
+    private static final Color POSE_COLOR = new Color();
+    /** From here on a flight to a pile is crossfading into it: the pile shows the card again (see {@link forge.screens.match.arena.ArenaFx#crossfade}). */
+    private static final float LANDED = 0.84f;
+
     private static void drawEnterArena(Graphics g, Flight f, float t) {
         final forge.screens.match.views.VCardDisplayArea.CardAreaPanel panel = forge.screens.match.views.VCardDisplayArea.CardAreaPanel.peek(f.card);
+        if (!f.rippled && t >= (f.style == Style.POPUP ? 0.55f : 0.92f)) { //it has touched down: a ring of light spreads from the tile
+            f.rippled = true;
+            final boolean small = f.card.isToken() || f.card.getCurrentState().isLand(); //a swarm of tokens and a land drop get a small, shared ring
+            forge.screens.match.arena.ArenaFx.landingRing(f.to.x + f.to.width / 2f, f.to.y + f.to.height / 2f,
+                    Math.max(f.to.width, f.to.height) * (small ? 0.55f : 0.85f), forge.screens.match.arena.ArenaFx.colorOf(f.card, new Color()));
+        }
         if (f.style == Style.POPUP) { //a token: it appears in place, growing with a small overshoot
             final float e = Interpolation.swingOut.apply(t);
             final float alpha = Math.min(1f, t * 3f);
             drawArenaTileAt(g, f, panel, 0.5f + 0.5f * e, alpha);
             return;
         }
-        // a slight arc, easing out as it lands, then the tile comes up under it as the card fades
-        final float e = forge.screens.match.arena.ArenaMotion.OUT.at(t);
-        final float h = f.fromH + (f.toH - f.fromH) * e;
-        final float cx = f.fromCx + (f.toCx - f.fromCx) * e;
-        final float cy = f.fromCy + (f.toCy - f.fromCy) * e - Math.min(ARC_HEIGHT * 2f, Math.abs(f.toCy - f.fromCy) * 0.15f) * MathUtils.sin(MathUtils.PI * t);
-        final float land = MathUtils.clamp((t - 0.7f) / 0.3f, 0f, 1f);
+        // it flies the way every card flies in the Arena look (lift-off, arc, shadow, easing), then the tile comes up under it as the card fades
+        final float land = forge.screens.match.arena.ArenaFx.crossfade(t);
         if (land > 0f) {
             drawArenaTileAt(g, f, panel, 1f, land);
         }
-        final float alpha = 1f - land;
-        if (alpha <= 0.01f) { return; }
-        final float w = h / FCardPanel.ASPECT_RATIO;
-        final float old = g.getfloatAlphaComposite();
-        g.setAlphaComposite(old * alpha);
-        forge.screens.match.arena.ArenaCards.cardShadow(g, cx - w / 2, cy - h / 2, w, h, w * 0.045f);
-        CardRenderer.drawCard(g, f.card, cx - w / 2, cy - h / 2, w, h, CardStackPosition.Top, false, false, true);
-        g.setAlphaComposite(old);
+        poseRects(f);
+        forge.screens.match.arena.ArenaFx.colorOf(f.card, POSE_COLOR);
+        forge.screens.match.arena.ArenaFx.drawPose(g, f.card, f.card.getController(), POSE_COLOR, POSE_FROM, POSE_TO, t, 0f, false, 0f,
+                forge.screens.match.arena.ArenaFx.LIFT, null);
+    }
+
+    /** The flight's start and end as card-shaped rectangles (from its centres and heights), in the scratch pair. */
+    private static void poseRects(Flight f) {
+        final float fw = f.fromH / FCardPanel.ASPECT_RATIO, tw = f.toH / FCardPanel.ASPECT_RATIO;
+        POSE_FROM.set(f.fromCx - fw / 2f, f.fromCy - f.fromH / 2f, fw, f.fromH);
+        POSE_TO.set(f.toCx - tw / 2f, f.toCy - f.toH / 2f, tw, f.toH);
     }
 
     /** The real tile at its place, scaled about its middle and faded (the panel itself is hidden while it flies). */
@@ -416,14 +484,8 @@ public final class CardFlightOverlay {
     }
 
     private static void drawLeaveArena(Graphics g, Flight f, float t) {
-        // the tile turns back into its card where it stood, then flies to its pile, speeding up, shrinking and fading
-        final float turn = f.cardShaped ? 1f : MathUtils.clamp(t / 0.22f, 0f, 1f);
-        final float m = MathUtils.clamp((t - 0.12f) / 0.88f, 0f, 1f);
-        final float e = Interpolation.pow2In.apply(m);
-        final float cx = f.fromCx + (f.toCx - f.fromCx) * e;
-        final float cy = f.fromCy + (f.toCy - f.fromCy) * e;
-        final float h = f.fromH + (f.toH - f.fromH) * e;
-        final float alpha = 1f - Interpolation.pow2In.apply(MathUtils.clamp((m - 0.55f) / 0.45f, 0f, 1f));
+        // the tile turns back into its card where it stood, then the card flies to its pile the way every card flies in the Arena look
+        final float turn = f.cardShaped ? 1f : MathUtils.clamp(t / 0.18f, 0f, 1f);
         final float old = g.getfloatAlphaComposite();
         if (turn < 1f) {
             final forge.screens.match.views.VCardDisplayArea.CardAreaPanel panel = forge.screens.match.views.VCardDisplayArea.CardAreaPanel.peek(f.card);
@@ -432,14 +494,13 @@ public final class CardFlightOverlay {
                 forge.screens.match.arena.ArenaCards.drawTile(g, f.card, panel.getArenaState(), false, f.from.x, f.from.y, f.from.width, f.from.height);
             }
         }
-        if (alpha <= 0.01f || turn <= 0f) {
-            g.setAlphaComposite(old);
-            return;
+        if (turn > 0f) {
+            g.setAlphaComposite(old * turn);
+            poseRects(f);
+            forge.screens.match.arena.ArenaFx.colorOf(f.card, POSE_COLOR);
+            forge.screens.match.arena.ArenaFx.drawPose(g, f.card, f.card.getOwner(), POSE_COLOR, POSE_FROM, POSE_TO, t, 1e-4f, false, 0f,
+                    forge.screens.match.arena.ArenaFx.LIFT * 0.6f, null);
         }
-        final float w = h / FCardPanel.ASPECT_RATIO;
-        g.setAlphaComposite(old * alpha * turn);
-        forge.screens.match.arena.ArenaCards.cardShadow(g, cx - w / 2, cy - h / 2, w, h, w * 0.045f);
-        CardRenderer.drawCard(g, f.card, cx - w / 2, cy - h / 2, w, h, CardStackPosition.Top, false, false, true);
         g.setAlphaComposite(old);
     }
 
@@ -615,6 +676,11 @@ public final class CardFlightOverlay {
         for (int i = 0; i < flights.size(); ) {      // index loop: no Iterator allocation, oldest drawn first
             Flight f = flights.get(i);
 
+            if (f.cancelled) {
+                f.done = true;
+                flights.remove(i);
+                continue;
+            }
             if (!f.resolved) {
                 if (f.leave) { resolveLeave(f); } else { resolve(f, bottomPlayer, screenH); }
             }
@@ -623,11 +689,13 @@ public final class CardFlightOverlay {
                 flights.remove(i);
                 continue;
             }
+            if (f.held && now - f.heldAt > HOLD_MOST_NANOS) { release(f); } // nobody said where it goes: it goes
 
-            float t = (now - f.startNanos - f.delayNanos) / f.durationNanos;
+            float t = f.held ? 0f : (now - f.startNanos - f.delayNanos) / f.durationNanos;
             if (t < 0f) { t = 0f; } // still waiting for its turn: hold the card at its starting spot
             final boolean last = t >= 1f;
             if (last) { t = 1f; } // still draw the final pose once; the real card takes over next frame
+            f.progress = t;
 
             if (f.leave) { drawLeave(g, f, t); } else { drawEnter(g, f, t); }
 

@@ -151,7 +151,10 @@ public final class ArenaCards {
          */
         public void follow(final float x, final float y, final Object area) {
             final long frame = ArenaMotion.frame();
-            if (seenFrame >= frame - 3 && area == seenArea) {
+            if (!ArenaTheme.isEffectsOn()) { // reduce motion: a card laid out somewhere else is simply there
+                dx.set(0f);
+                dy.set(0f);
+            } else if (seenFrame >= frame - 3 && area == seenArea) {
                 if (x != seenX) {
                     dx.shift(seenX - x);
                 }
@@ -174,7 +177,7 @@ public final class ArenaCards {
         }
 
         void noticeTapped(final boolean tapped) {
-            if (!tapKnown) {
+            if (!tapKnown || !ArenaTheme.isEffectsOn()) { // reduce motion: it turns over at once, with no swing past the tilt
                 tapKnown = true;
                 tappedShown = tapped;
                 tap.set(tapped ? 1f : 0f);
@@ -188,9 +191,11 @@ public final class ArenaCards {
         }
 
         void noticeGlow(final int now) {
-            if (!glowKnown) {
+            if (!glowKnown || !ArenaTheme.isEffectsOn()) { // reduce motion: the light changes at once
                 glowKnown = true;
                 glow = now;
+                glowWas = GLOW_NONE;
+                glowMix.set(1f);
                 return;
             }
             if (now != glow) {
@@ -201,24 +206,30 @@ public final class ArenaCards {
             }
         }
 
-        void noticeStats(final String stats, final int damage) {
-            if (statsSeen != null && stats != null && !stats.equals(statsSeen)) {
+        void noticeStats(final CardView card, final String stats, final int damage) {
+            if (statsSeen != null && stats != null && !stats.equals(statsSeen) && ArenaTheme.isEffectsOn()) { // reduce motion: no pop
                 statsPop.set(1f);
                 statsPop.to(0f, 420);
             }
             statsSeen = stats;
-            if (damageSeen >= 0 && damage > damageSeen) {
-                hitFlash.set(1f);
-                hitFlash.to(0f, 380);
-                if (shakeTween != null) {
-                    shakeTween.cancel();
-                }
-                shakeTween = ArenaMotion.play(300, ArenaMotion.LINEAR, t -> shake = (float) Math.sin(t * Math.PI * 5d) * (1f - t), () -> shake = 0f);
-                hitText = "-" + (damage - damageSeen);
-                hitFloat.set(0f);
-                hitFloat.to(1f, 1000, 0, ArenaMotion.LINEAR, null);
+            if (damageSeen >= 0 && damage > damageSeen && ArenaTheme.isEffectsOn()) { // reduce motion: no flash, jolt or number
+                final int amount = damage - damageSeen;
+                ArenaStackFx.whenHit(card, () -> hit(amount)); // while an instant or sorcery is on its way to it, the hit starts from its bolt's finish
             }
             damageSeen = damage;
+        }
+
+        /** The red flash, the jolt and the number that floats off it when it is hurt. */
+        private void hit(final int amount) {
+            hitFlash.set(1f);
+            hitFlash.to(0f, 380);
+            if (shakeTween != null) {
+                shakeTween.cancel();
+            }
+            shakeTween = ArenaMotion.play(300, ArenaMotion.LINEAR, t -> shake = (float) Math.sin(t * Math.PI * 5d) * (1f - t), () -> shake = 0f);
+            hitText = "-" + amount;
+            hitFloat.set(0f);
+            hitFloat.to(1f, 1000, 0, ArenaMotion.LINEAR, null);
         }
 
         /** Forgets what it showed: the next frame shows the card as it is, without animating to it. */
@@ -340,9 +351,13 @@ public final class ArenaCards {
         final int glow = glowFor(card, hovered, false);
         st.noticeGlow(glow);
         final String stats = tileStats(card, known, st);
-        st.noticeStats(stats, card.getDamage());
+        st.noticeStats(card, stats, card.getDamage());
         if (st.lift.goal() != (hovered ? 1f : 0f)) {
-            st.lift.to(hovered ? 1f : 0f, hovered ? 110 : 170);
+            if (ArenaTheme.isEffectsOn()) {
+                st.lift.to(hovered ? 1f : 0f, hovered ? 110 : 170);
+            } else {
+                st.lift.set(hovered ? 1f : 0f); // reduce motion: no glide, the card is up or down
+            }
         }
 
         final float tapAmount = ArenaMotion.clamp01(st.tap.get());
@@ -692,7 +707,7 @@ public final class ArenaCards {
 
     /** A font this many logical pixels high, rounded to an even size so a handful of sizes serve the whole board. */
     static FSkinFont evenFont(final float px) {
-        return ArenaTheme.fontPx(Math.max(8, Math.round(px / 2f) * 2));
+        return ArenaTheme.fontPx(Math.round(px / 2f) * 2);
     }
 
     private static void drawStatsPlate(final Graphics g, final CardView card, final CardStateView state, final State st, final String stats,
@@ -792,9 +807,17 @@ public final class ArenaCards {
         final int glow = glowFor(card, false, true);
         st.noticeGlow(glow);
         if (st.lift.goal() != (st.raised ? 1f : 0f)) {
-            st.lift.to(st.raised ? 1f : 0f, st.raised ? 110 : 170);
+            if (ArenaTheme.isEffectsOn()) {
+                st.lift.to(st.raised ? 1f : 0f, st.raised ? 110 : 170);
+            } else {
+                st.lift.set(st.raised ? 1f : 0f);
+            }
         }
-        st.lean.to(st.fanLean);
+        if (ArenaTheme.isEffectsOn()) {
+            st.lean.to(st.fanLean);
+        } else {
+            st.lean.set(st.fanLean); // reduce motion: the fan changes at once
+        }
         final float grow = 1f + ArenaBoard.FAN_HOVER_GROWTH * st.lift.get();
         final float w = bw * grow, h = bh * grow;
         final float x = bx + (bw - w) / 2f + st.dx.get(), y = by + (bh - h) + st.dy.get();
@@ -820,8 +843,13 @@ public final class ArenaCards {
             bloom(g, glow, x, y, w, h, radius, spread, st.raised, mix * breath);
         }
         // the raised card tilts towards the pointer, in perspective, with a glare
-        st.tiltX.to(st.raised ? (0.5f - ArenaMotion.clamp01(st.pointerV)) * 2f * MAX_TILT : 0f);
-        st.tiltY.to(st.raised ? (ArenaMotion.clamp01(st.pointerU) - 0.5f) * 2f * MAX_TILT : 0f);
+        if (ArenaTheme.isEffectsOn()) { // reduce motion: no tilt towards the pointer, no glare
+            st.tiltX.to(st.raised ? (0.5f - ArenaMotion.clamp01(st.pointerV)) * 2f * MAX_TILT : 0f);
+            st.tiltY.to(st.raised ? (ArenaMotion.clamp01(st.pointerU) - 0.5f) * 2f * MAX_TILT : 0f);
+        } else {
+            st.tiltX.set(0f);
+            st.tiltY.set(0f);
+        }
         final float tx = st.tiltX.get(), ty = st.tiltY.get();
         final TextureRegion face = Math.abs(tx) + Math.abs(ty) > 0.05f ? faceOf(card, st) : null;
         if (face != null) {
@@ -839,6 +867,44 @@ public final class ArenaCards {
         }
         drawHandCost(g, card, st, x, y, w);
         drawZoneBadge(g, card, x, y, w);
+        if (turned) {
+            g.endTransform();
+        }
+    }
+
+    /**
+     * The slot of a hand card that is still flying in from the library: no card face, an empty lit hollow in its place,
+     * leaning with the fan and wearing the glow the card will have (a card you could cast is marked before it lands),
+     * so the hand does not shift or go dark while the card is in the air.
+     */
+    public static void drawHandSlot(final Graphics g, final CardView card, final State st, final float bx, final float by, final float bw, final float bh) {
+        final int glow = glowFor(card, false, true);
+        st.noticeGlow(glow);
+        final float x = bx + st.dx.get(), y = by + st.dy.get();
+        final float radius = bw * 0.045f, lean = st.fanLean;
+        final boolean turned = Math.abs(lean) > 0.05f;
+        if (turned) {
+            g.startRotateTransform(x + bw / 2f, y + bh, -lean);
+        }
+        g.drawSoftShadow(ArenaTheme.alpha(ArenaTheme.BLACK, 0.3f, S1), x - bh * 0.012f, y + bh * 0.015f, bw, bh, radius, Math.max(ArenaTheme.px(6), bh * 0.035f));
+        g.fillSmoothRoundRect(ArenaTheme.alpha(ArenaTheme.NAVY, 0.4f, S1), x, y, bw, bh, radius);
+        final float mix = st.glowMix.get();
+        float breath = 1f;
+        if (glow == GLOW_SELECTABLE) {
+            breath = 0.72f + 0.28f * ArenaMotion.pulse(1.5f);
+        } else if (glow == GLOW_PLAYABLE) {
+            breath = 0.8f + 0.2f * ArenaMotion.pulse(2.4f);
+        }
+        final float spread = Math.max(ArenaTheme.px(6), Math.round(bw * 0.07f));
+        if (st.glowWas != GLOW_NONE && mix < 1f) {
+            bloom(g, st.glowWas, x, y, bw, bh, radius, spread, false, 1f - mix);
+        }
+        if (glow != GLOW_NONE) {
+            bloom(g, glow, x, y, bw, bh, radius, spread, false, mix * breath);
+            rim(g, glow, x, y, bw, bh, radius, mix * (0.5f + 0.5f * breath));
+        } else {
+            g.drawSmoothRoundRect(1f, ArenaTheme.alpha(ArenaTheme.WHITE, 0.2f, S1), x, y, bw, bh, radius);
+        }
         if (turned) {
             g.endTransform();
         }

@@ -230,7 +230,7 @@ public final class ArenaDialogKit {
 
     /** A font {@code px} logical pixels big, rounded to an even size so a few sizes serve every dialog. */
     public static FSkinFont font(final float px) {
-        return ArenaTheme.fontPx(Math.max(8, Math.round(px / 2f) * 2));
+        return ArenaTheme.fontPx(Math.round(px / 2f) * 2);
     }
 
     /** The largest of those fonts, from {@code mostPx} down to {@code leastPx}, at which {@code text} is at most {@code room} wide. */

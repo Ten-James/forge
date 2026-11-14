@@ -11,6 +11,18 @@
  * <li>{@link forge.screens.match.arena.ArenaArt}: shared drawing primitives (panels, frames, buttons, pills,
  *     badges, dividers, glow, shadow, text, board backdrop, portraits), on top of the new {@code forge.Graphics}
  *     shape/glow/tilt/fade helpers.</li>
+ * <li>{@link forge.screens.match.arena.ArenaTableBoard}: the clean 3D board (the default; {@code UI_ARENA_CLEAN_BOARD}),
+ *     a calm table in perspective, baked on a worker thread from the real back-buffer size and uploaded in strips (see
+ *     docs/Development/Arena-Board-and-Effects.md). {@code ArenaBoardPainter} is the flagstone mat it
+ *     replaces when that setting is off.</li>
+ * <li>{@link forge.screens.match.arena.ArenaFx}: the engine of the effects drawn over the board by the match screen's
+ *     overlay (card flights, rings, bursts, bolts, shards, ghosts); {@link forge.screens.match.arena.ArenaDrawFlights} starts
+ *     the flights of cards dealt, drawn, milled and discarded (read from the zone updates, {@code VCardDisplayArea} asks
+ *     {@code handCardInFlight}); {@link forge.screens.match.arena.ArenaStackFx} starts the flights of spells and
+ *     abilities onto the stack, tracks what the stack view showed and decides how an entry went off. Permanents landing
+ *     ({@code CardFlightOverlay}) ring. All of it follows {@code ArenaTheme.isEffectsOn()} ({@code UI_ARENA_EFFECTS}),
+ *     the reduce-motion switch; anything new that moves must too.</li>
+ * <li>{@link forge.screens.match.arena.ArenaArcs}: the targeting arrows: arcs that draw themselves in with an arrow head.</li>
  * <li>{@link forge.screens.match.arena.ArenaSkin}: the hook a view draws through.</li>
  * <li>{@link forge.screens.match.arena.ArenaCurtain}: fades over screen changes and over things that go away.</li>
  * <li>{@link forge.screens.match.arena.ArenaShortcuts}: the match keyboard shortcuts, as data.</li>

@@ -44,6 +44,7 @@ import forge.screens.match.TargetingOverlay;
 import forge.screens.match.arena.ArenaArt;
 import forge.screens.match.arena.ArenaBoard;
 import forge.screens.match.arena.ArenaCards;
+import forge.screens.match.arena.ArenaStackFx;
 import forge.screens.match.arena.ArenaMatchLayout;
 import forge.screens.match.arena.ArenaMotion;
 import forge.screens.match.arena.ArenaTheme;
@@ -127,28 +128,14 @@ public class VStack extends FDropDown {
         return ArenaMatchLayout.applies();
     }
 
-    // the spells the Arena stack showed, and where: one that leaves for a pile flies there from its large card
-    private final Map<Integer, CardView> arenaShownSpells = new HashMap<>();
-    private final Map<Integer, Rectangle> arenaShownRects = new HashMap<>();
-
+    /** The Arena stack's tracker says which entries are gone: a spell that leaves for a pile flies there from its large card. */
     private void arenaSendOffLeavers(FCollectionView<StackItemView> stack) {
-        if (arenaShownSpells.isEmpty()) {
-            return;
-        }
-        final Set<Integer> still = new HashSet<>();
-        for (StackItemView item : stack) {
-            if (!item.isAbility() && item.getSourceCard() != null) {
-                still.add(item.getSourceCard().getId());
+        ArenaStackFx.stackSynced(stack, (item, card, where) -> {
+            if (!item.isAbility() && where.width > 0 && !CardFlightOverlay.isLeavingStack(card.getId())) {
+                return CardFlightOverlay.startArenaStackLeave(card, where);
             }
-        }
-        for (Map.Entry<Integer, CardView> e : arenaShownSpells.entrySet()) {
-            final Rectangle r = arenaShownRects.get(e.getKey());
-            if (!still.contains(e.getKey()) && r != null && r.width > 0 && !CardFlightOverlay.isLeavingStack(e.getKey())) {
-                CardFlightOverlay.startArenaStackLeave(e.getValue(), r);
-            }
-        }
-        arenaShownSpells.clear();
-        arenaShownRects.clear();
+            return null;
+        });
     }
 
     /** The Arena stack: the top item a large card at the right of its dock, up to four more stepping left behind it. */
@@ -688,6 +675,9 @@ public class VStack extends FDropDown {
 
         @Override
         public boolean tap(float x, float y, int count) {
+            if (Forge.mouseButtonID != com.badlogic.gdx.Input.Buttons.RIGHT && ArenaStackFx.reveal(stackInstance)) { //a right click still opens the card, flying or not
+                return true; //an entry still flying in: the touch only shows it in its place
+            }
             if (isSelectableTarget()) { // a stack target is being chosen: tapping the entry picks (or unpicks) it
                 activeStackInstance = stackInstance;
                 //must invoke in game thread in case a dialog needs to be shown
@@ -772,8 +762,11 @@ public class VStack extends FDropDown {
             final float w = getWidth(), h = getHeight(), r = w * 0.045f;
             if (!stackInstance.isAbility()) { //a spell flies from here to where it goes
                 CardFlightOverlay.noteStackRect(sourceCard.getId(), screenPos.x, screenPos.y, w, h);
-                arenaShownSpells.put(sourceCard.getId(), sourceCard);
-                arenaShownRects.computeIfAbsent(sourceCard.getId(), k -> new Rectangle()).set(screenPos.x, screenPos.y, w, h);
+            }
+            final boolean target = MatchController.instance.isHighlighted(stackInstance) ? true : isSelectableTarget();
+            final Color ghostRim = MatchController.instance.isHighlighted(stackInstance) ? ArenaTheme.CHOSEN : target ? ArenaTheme.SELECTABLE : null;
+            if (ArenaStackFx.entry(g, stackInstance, screenPos, w, h, ghostRim, stackInstance.isAbility() ? null : VCardDisplayArea.CardAreaPanel.peekHandStart(sourceCard))) {
+                return; //it is flying in from where it was cast: the effect layer draws it, and a ghost holds its place
             }
             final boolean top = activeItem == this;
             final boolean pickable = isSelectableTarget();

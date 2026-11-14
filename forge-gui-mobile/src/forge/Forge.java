@@ -1015,6 +1015,7 @@ public class Forge implements ApplicationListener {
         ImageCache.getInstance().allowSingleLoad();
         ForgeAnimation.advanceAll();
         ArenaMotion.tick(); // Arena look: its animation clock (asks for the next frame itself while anything moves)
+        endTouchHover();
 
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT); // Clear the screen.
         float delta = Gdx.graphics.getDeltaTime();
@@ -1395,6 +1396,45 @@ public class Forge implements ApplicationListener {
     }
     public static float mouseMovedX = 0;
     public static float mouseMovedY = 0;
+
+    /** How long the spot a finger touched keeps the hover hints of the Arena board that a mouse pointer would show. */
+    private static final long TOUCH_HOVER_MS = 2600;
+    private static boolean touchHover;
+    private static long touchHoverUntil;
+
+    /**
+     * The Arena board's hover hints (what a pile's light means, a plate's tooltip, the hint over the card size slider) have
+     * no touch path of their own: a finger that lands somewhere other than where the mouse pointer rests acts as the
+     * pointer for a moment, so touching a pile, plate or slider shows its hint, and the hint goes after a few seconds.
+     */
+    private static void startTouchHover(int x, int y) {
+        if (!forge.screens.match.arena.ArenaMatchLayout.applies()) {
+            return;
+        }
+        final boolean mouseClick = magnify && !touchHover && Math.abs(x - mouseMovedX) < 6 && Math.abs(y - mouseMovedY) < 6; // a click where the pointer rests
+        if (!mouseClick) {
+            touchHover = true;
+            magnify = true;
+            mouseMovedX = x;
+            mouseMovedY = y;
+            touchHoverUntil = System.currentTimeMillis() + TOUCH_HOVER_MS;
+            Gdx.graphics.requestRendering();
+        }
+    }
+
+    private static void endTouchHover() {
+        if (!touchHover) {
+            return;
+        }
+        if (System.currentTimeMillis() >= touchHoverUntil) {
+            touchHover = false;
+            magnify = false;
+            mouseMovedX = mouseMovedY = -1f;
+            Gdx.graphics.requestRendering();
+        } else {
+            forge.screens.match.arena.ArenaMotion.requestFrame(); // the hint is up for a few seconds, then goes
+        }
+    }
     private static class MainInputProcessor extends FGestureAdapter {
         private static final List<FDisplayObject> potentialListeners = new ArrayList<>();
         private static char lastKeyTyped;
@@ -1541,6 +1581,9 @@ public class Forge implements ApplicationListener {
                 }
             }
             mouseButtonID = button;
+            if (pointer == 0) {
+                startTouchHover(x, y);
+            }
             return super.touchDown(x, y, pointer, button);
         }
 
@@ -1709,6 +1752,7 @@ public class Forge implements ApplicationListener {
         //mouseMoved and scrolled events for desktop version
         @Override
         public boolean mouseMoved(int screenX, int screenY) {
+            touchHover = false; // a real pointer is moving: it takes over from a finger
             magnify = true;
             mouseMovedX = screenX;
             mouseMovedY = screenY;

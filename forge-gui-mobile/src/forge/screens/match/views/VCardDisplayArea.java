@@ -34,6 +34,8 @@ import forge.screens.match.MatchController;
 import forge.screens.match.MatchScreen;
 import forge.screens.match.arena.ArenaBoard;
 import forge.screens.match.arena.ArenaCards;
+import forge.screens.match.arena.ArenaDrawFlights;
+import forge.screens.match.arena.ArenaFx;
 import forge.screens.match.arena.ArenaMatchLayout;
 import forge.toolbox.FCardPanel;
 import forge.toolbox.FDisplayObject;
@@ -745,6 +747,10 @@ public abstract class VCardDisplayArea extends VDisplayArea implements ActivateH
         private static final Set<Integer> animatedIds = Sets.newConcurrentHashSet();
         private static final Set<Integer> movedIds = Sets.newConcurrentHashSet();
         public static void markMoved(CardView c) { movedIds.add(c.getId()); }
+        /** Where the card was in the hand when it was played, without taking it (a cast spell's flight onto the stack reads it). */
+        public static Rectangle peekHandStart(CardView card) {
+            return handStarts.get(card.getId());
+        }
         public static Rectangle takeHandStart(CardView card) {
             return handStarts.remove(card.getId());
         }
@@ -826,6 +832,7 @@ public abstract class VCardDisplayArea extends VDisplayArea implements ActivateH
             handStarts.clear();
             animatedIds.clear();
             CardFlightOverlay.clear();
+            ArenaFx.clear();
             for (CardAreaPanel p : allCardPanels.values()) {
                 p.flight = null;
                 p.entryStart = -1;
@@ -854,6 +861,7 @@ public abstract class VCardDisplayArea extends VDisplayArea implements ActivateH
             handStarts.clear();
             animatedIds.clear();
             CardFlightOverlay.clear();
+            ArenaFx.clear();
             generation++; // field rows drop their remembered board on their next refresh
         }
 
@@ -1039,9 +1047,14 @@ public abstract class VCardDisplayArea extends VDisplayArea implements ActivateH
 
         @Override
         public boolean tap(float x, float y, int count) {
-            if (count > 1) //prevent double choice lists or activate handle
+            //the tap that showed a flying card in its slot was used up: the next quick one is a first tap, not a double tap
+            if (count > 1 && !ArenaDrawFlights.justRevealed()) //prevent double choice lists or activate handle
                 return false;
             if (renderedCardContains(x, y)) {
+                final boolean rightClick = GuiBase.getInterface().isRunningOnDesktop() && Forge.mouseButtonID == Input.Buttons.RIGHT;
+                if (!rightClick && ArenaDrawFlights.reveal(getCard())) { //a right click zooms the card even while it flies in
+                    return true; //a drawn card still flying in: the touch only shows it in its slot
+                }
                 //must invoke in game thread in case a dialog needs to be shown
                 ThreadUtil.invokeInGameThread(() -> {
                     if (GuiBase.getInterface().isRunningOnDesktop() && Forge.mouseButtonID == Input.Buttons.RIGHT) {
@@ -1060,6 +1073,9 @@ public abstract class VCardDisplayArea extends VDisplayArea implements ActivateH
         @Override
         public boolean flick(float x, float y) {
             if (renderedCardContains(x, y)) {
+                if (ArenaDrawFlights.reveal(getCard())) {
+                    return true;
+                }
                 //must invoke in game thread in case a dialog needs to be shown
                 ThreadUtil.invokeInGameThread(() -> selectCard(true));
                 return true;
@@ -1068,6 +1084,7 @@ public abstract class VCardDisplayArea extends VDisplayArea implements ActivateH
         }
 
         public boolean selectCard(boolean selectEntireStack) {
+            ArenaDrawFlights.finish(getCard()); //a touch on a drawn card that is still flying in puts it in its slot
             if (displayArea != null && (getCard().getZone() == ZoneType.Hand || isArenaHandCard()) && screenPos.width > 0) { //a cast flies from where it was shown
                 handStarts.put(getCard().getId(), new Rectangle(screenPos));
             }
@@ -1242,7 +1259,11 @@ public abstract class VCardDisplayArea extends VDisplayArea implements ActivateH
                     st.pointerU = (Forge.mouseMovedX - screenPos.x) / getWidth();
                     st.pointerV = (Forge.mouseMovedY - screenPos.y) / (st.cardHeight > 0 ? st.cardHeight : getHeight());
                 }
-                ArenaCards.drawHandCard(g, getCard(), st, isHovered(), 0, 0, getWidth(), st.cardHeight > 0 ? st.cardHeight : getHeight());
+                final float cardH = st.cardHeight > 0 ? st.cardHeight : getHeight();
+                if (ArenaDrawFlights.handCardInFlight(g, getCard(), st, screenPos, cardH, st.fanLean)) {
+                    return; //it is flying in from the library: the effect layer draws it, and an empty lit slot holds its place
+                }
+                ArenaCards.drawHandCard(g, getCard(), st, isHovered(), 0, 0, getWidth(), cardH);
                 return;
             }
             if (displayArea != null && displayArea.rotateCards180) {

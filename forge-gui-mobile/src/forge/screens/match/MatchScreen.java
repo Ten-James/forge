@@ -66,12 +66,15 @@ import forge.player.PlayerZoneUpdate;
 import forge.screens.FScreen;
 import forge.screens.match.arena.ArenaBoardPainter;
 import forge.screens.match.arena.ArenaCardSizeSlider;
+import forge.screens.match.arena.ArenaDrawFlights;
+import forge.screens.match.arena.ArenaFx;
 import forge.screens.match.arena.ArenaCornerMenu;
 import forge.screens.match.arena.ArenaMatchLayout;
 import forge.screens.match.arena.ArenaPlayerInfo;
 import forge.screens.match.arena.ArenaTheme;
 import forge.screens.match.arena.ArenaShortcutSheet;
 import forge.screens.match.arena.ArenaShortcuts;
+import forge.screens.match.arena.ArenaTableBoard;
 import forge.screens.match.arena.ArenaTurnBanner;
 import forge.screens.match.views.VCardDisplayArea.CardAreaPanel;
 import forge.screens.match.views.VPhaseIndicator.PhaseLabel;
@@ -623,6 +626,7 @@ public class MatchScreen extends FScreen {
     @Override
     public void onClose(Consumer<Boolean> canCloseCallback) {
         ArenaTheme.removeListener(arenaThemeListener);
+        ArenaFx.clear(); //nothing is left flying when the match is left
         MatchController.writeMatchPreferences();
         SoundSystem.instance.setBackgroundMusic(MusicPlaylist.MENUS);
         if (chat != null) {
@@ -990,9 +994,11 @@ public class MatchScreen extends FScreen {
             ArenaPlayerInfo.drawEliminated(g, game, cornerMenu.getRight(), cardSizeSlider.getBottom() + ArenaMatchLayout.cornerGap(), outH);
         }
         drawArcs(g);
+        forge.screens.match.arena.ArenaArcs.drawFading(g);
         CardFlightOverlay.draw(g, bottomPlayerPanel.getPlayer(), getHeight());
-        if (arenaLaidOut && isArenaBoard() && bottomPlayerPrompt.isVisible() && arenaPromptMode == ArenaMatchLayout.PromptMode.DECISION) {
-            bottomPlayerPrompt.drawLate(g); //a decision above the arcs: they never run through its words
+        ArenaFx.draw(g);
+        if (arenaLaidOut && isArenaBoard() && bottomPlayerPrompt.isVisible() && arenaPromptMode != null) {
+            bottomPlayerPrompt.drawLate(g); //the prompt over the arcs and effects, in every mode: they never run through its words or buttons
         }
         forge.screens.match.arena.ArenaTurnBanner.draw(g, getWidth(), getHeight());
         drawCardPreview(g);
@@ -1285,6 +1291,18 @@ public class MatchScreen extends FScreen {
         return attached != null && attached.iterator().hasNext();
     }
 
+    /** Pass priority until the stack has resolved (F2, or the gear menu's entry, which is the way to it on a touch screen). False when the stack is empty. */
+    public boolean passUntilStackResolves() {
+        final IGameController controller = getGameController();
+        final PlayerView local = MatchController.instance.getCurrentPlayer();
+        final GameView gameView = MatchController.instance.getGameView();
+        if (controller == null || local == null || gameView == null || gameView.getStack().isEmpty()) {
+            return false;
+        }
+        controller.sendYieldUpdate(new YieldUpdate.StackYield(local, true, true));
+        return true;
+    }
+
     /**
      * The keyboard shortcuts the Arena look adds ({@link ArenaShortcuts}, those not {@code existing}); the ones keyDown
      * already had stay in its switch, so both looks answer them the same way. Z zooms the card under the pointer.
@@ -1295,16 +1313,8 @@ public class MatchScreen extends FScreen {
             return false;
         }
         switch (action) {
-            case PASS_UNTIL_STACK_RESOLVES: {
-                final IGameController controller = getGameController();
-                final PlayerView local = MatchController.instance.getCurrentPlayer();
-                final GameView gameView = MatchController.instance.getGameView();
-                if (controller == null || local == null || gameView == null || gameView.getStack().isEmpty()) {
-                    return false;
-                }
-                controller.sendYieldUpdate(new YieldUpdate.StackYield(local, true, true));
-                return true;
-            }
+            case PASS_UNTIL_STACK_RESOLVES:
+                return passUntilStackResolves();
             case PASS_UNTIL_MY_TURN:
                 MatchController.toggleYieldMarker(MatchController.instance.getCurrentPlayer(), PhaseType.UPKEEP);
                 return true;
@@ -1354,8 +1364,9 @@ public class MatchScreen extends FScreen {
     }
 
     /**
-     * A right click on the Arena board away from any card backs out: it closes an open menu, or cancels the decision
-     * being made (never ends the turn: the priority prompt's End Turn is not a way back).
+     * A right click on the Arena board away from any card backs out: it closes an open menu, or, on a second right click
+     * within a moment, cancels the decision being made (the first only asks; never ends the turn: the priority prompt's
+     * End Turn is not a way back).
      */
     public boolean arenaBackOut() {
         if (cornerMenu.closeMenus()) {
@@ -1363,7 +1374,8 @@ public class MatchScreen extends FScreen {
         }
         final VPrompt prompt = getActivePrompt();
         if (prompt.getArenaMode() == forge.screens.match.arena.ArenaMatchLayout.PromptMode.DECISION && prompt.getBtnCancel().isEnabled()) {
-            return prompt.getBtnCancel().trigger();
+            // a right click that missed a card must not quietly drop the decision: the first only asks (the Cancel button says so), the second cancels
+            return forge.screens.match.arena.ArenaPrompt.confirmBackOut() && prompt.getBtnCancel().trigger();
         }
         return false;
     }
@@ -1669,6 +1681,7 @@ public class MatchScreen extends FScreen {
     }
 
     public void updateZones(final Iterable<PlayerZoneUpdate> zonesToUpdate) {
+        ArenaDrawFlights.zonesUpdated(zonesToUpdate); //the Arena look reads draws from these updates
         for (final PlayerZoneUpdate update : zonesToUpdate) {
             final PlayerView owner = update.getPlayer();
             final VPlayerPanel panel = getPlayerPanel(owner);
@@ -1821,8 +1834,18 @@ public class MatchScreen extends FScreen {
                 final String dayTime = MatchController.instance.getDayTime();
                 final ArenaTheme.BoardVariant variant = "Day".equalsIgnoreCase(dayTime) ? ArenaTheme.BoardVariant.DAY
                         : "Night".equalsIgnoreCase(dayTime) ? ArenaTheme.BoardVariant.NIGHT : ArenaTheme.BoardVariant.DEFAULT;
-                ArenaBoardPainter.draw(g, 0, 0, getWidth(), getHeight(), variant);
+                if (ArenaTheme.isCleanBoard()) {
+                    ArenaTableBoard.draw(g, 0, 0, getWidth(), getHeight(), variant);
+                } else {
+                    if (ArenaTableBoard.isLoaded()) {
+                        ArenaTableBoard.release(); //the stone floor is chosen: the table's picture is not wanted
+                    }
+                    ArenaBoardPainter.draw(g, 0, 0, getWidth(), getHeight(), variant);
+                }
                 return;
+            }
+            if (!ArenaTheme.isActive() && ArenaTableBoard.isLoaded()) {
+                ArenaTableBoard.release(); //the Arena look is off
             }
             super.drawBackground(g);
             if (!FModel.getPreferences().getPrefBoolean(FPref.UI_MATCH_IMAGE_VISIBLE)) {

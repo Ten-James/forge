@@ -120,6 +120,10 @@ public class ForgePreferences extends AbstractPreferences<ForgePreferences.FPref
         UI_SKIN ("Default"),
         /** The Arena look of matches, in both the Swing client and the libGDX client (desktop, and Android/iOS in landscape). */
         UI_ARENA_THEME ("true"),
+        /** The libGDX Arena board is the clean 3D table instead of the flagstone mat. */
+        UI_ARENA_CLEAN_BOARD ("true"),
+        /** The libGDX Arena board plays its effects: cards flying from the library and onto the stack, rings and sparks, arrows drawing in. */
+        UI_ARENA_EFFECTS ("true"),
         /** How large the cards are on the libGDX Arena board (battlefield and hand), in percent: the slider under its corner buttons. */
         UI_ARENA_CARD_SIZE ("100"),
         UI_CJK_FONT (""),

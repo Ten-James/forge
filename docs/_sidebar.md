@@ -53,6 +53,7 @@
   - [Docker Container](docker-setup.md)
   - [Network Testing](Development/Network-Testing.md)
   - [UI Guidelines](Development/UI-Guidelines.md)
+  - [Arena Board and Effects](Development/Arena-Board-and-Effects.md)
 
 - Customization & Themes
   - [Skins](Skins.md)

@@ -174,11 +174,43 @@ public final class ArenaPrompt {
         return endTurnHint;
     }
 
+    public static String backOutHint() {
+        return msg("lblArenaHintBackOut");
+    }
+
     public static String undoHint() {
         if (undoHint == null) {
             undoHint = msg("lblArenaHintUndo");
         }
         return undoHint;
+    }
+
+    private static final long BACK_OUT_ASK_MS = 2800;
+    private static long backOutAsked = Long.MIN_VALUE / 2;
+
+    /**
+     * A right click on the empty board is a way to cancel the decision being made, but one that goes by without a word
+     * is easy to make by accident (a right click that missed a card). The first only asks: the Cancel button gets a hint
+     * plate ("Right-click again to cancel") for a few seconds; the second within that time cancels. True on the second.
+     */
+    public static boolean confirmBackOut() {
+        final long now = com.badlogic.gdx.utils.TimeUtils.millis();
+        if (now - backOutAsked < BACK_OUT_ASK_MS) {
+            backOutAsked = Long.MIN_VALUE / 2;
+            return true;
+        }
+        backOutAsked = now;
+        ArenaMotion.requestFrame();
+        return false;
+    }
+
+    /** Whether the Cancel button is waiting for the second right click, and (when so) a frame is asked for to see it go. */
+    public static boolean isBackOutAsked() {
+        final boolean asked = com.badlogic.gdx.utils.TimeUtils.millis() - backOutAsked < BACK_OUT_ASK_MS;
+        if (asked) {
+            ArenaMotion.requestFrame();
+        }
+        return asked;
     }
 
     /** A hint plate above a button (in its coordinates), kept inside the window. */
