@@ -7,8 +7,11 @@ import forge.Graphics;
 /**
  * The Arena's targeting arcs (port of the Swing TargetingOverlay's Arena arcs): a glowing curve from what aims to what
  * it aims at, bowed away from the straight line, with a bright core, a soft glow and a pulse of light running along it
- * towards the target, which wears a small ring. Drawn as a trail of batched soft discs, so a board full of arcs costs
- * a few hundred quads and no transforms or extra draw calls.
+ * towards the target, which wears a small ring. Drawn as one solid tapered ribbon (a bright core over two soft glow
+ * ribbons, antialiased through the Arena shader: {@code Graphics.fillSmoothRibbon}) and a solid triangular head, so a
+ * board full of arcs costs a few dozen quads and no transforms or extra draw calls. The pulse runs for the first three
+ * cycles of an arc only; after that it rests and asks for no frames. An arc that a later view draws again in the same
+ * frame (the stack dropdown) is not drawn a second time as a fading ghost.
  *
  * <p>An arc that has just appeared draws itself in from its source to its target (a bright head runs ahead of it and
  * the mark and arrow head open at the end), and wears an arrow head pointing the way it goes. Arcs are told apart by
