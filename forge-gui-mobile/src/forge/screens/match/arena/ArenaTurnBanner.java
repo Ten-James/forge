@@ -103,7 +103,7 @@ public final class ArenaTurnBanner {
         // the words come in from a little to the left and go on a little to the right
         final float slide = h * 0.05f; // against the height, so it is the same on a narrow window and an ultrawide one
         final float dx = ArenaTheme.isEffectsOn() ? (1f - in) * -slide + out * slide : 0f; // reduce motion: a plain fade, no slide
-        final FSkinFont font = ArenaTheme.fontPx(Math.min(72, Math.round(bandH * 0.5f)));
+        final FSkinFont font = ArenaTheme.fontPx(Math.round(bandH * 0.5f));
         final float o = Math.max(1f, ArenaTheme.px(1.5f));
         g.drawText(text, font, ArenaTheme.alpha(ArenaTheme.BLACK, 0.75f * alpha, S1), dx + o, y + 2 * o, w, bandH, false, Align.center, true);
         ArenaArt.textBold(g, text, font, ArenaTheme.alpha(ArenaTheme.WHITE, alpha, S2), dx, y, w, bandH, Align.center);

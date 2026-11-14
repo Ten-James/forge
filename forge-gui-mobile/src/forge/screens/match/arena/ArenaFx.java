@@ -15,6 +15,7 @@ import forge.game.GameView;
 import forge.game.card.CardView;
 import forge.game.card.CardView.CardStateView;
 import forge.game.player.PlayerView;
+import forge.game.zone.ZoneType;
 import forge.gui.FThreads;
 import forge.screens.match.MatchController;
 import forge.toolbox.FCardPanel;
@@ -39,9 +40,11 @@ import forge.toolbox.FCardPanel;
 public final class ArenaFx {
     private ArenaFx() { }
 
-    /** The most effects alive at once, and flights among them. A board wipe or a big draw stays readable. */
+    /** The most effects alive at once, and (draws and stack entries) flights among them. A board wipe or a big draw stays readable; what is over the limit just appears. */
     public static final int MAX_EFFECTS = 40, MAX_FLIGHTS = 12;
     static final int DRAW_MS = 600, BACK_MS = 520, STACK_MS = 460;
+    /** How high a flight's arc rises, as a share of the card's height. */
+    public static final float LIFT = 0.26f;
     static final int BOLT_MS = 420;
     private static final int RING_MS = 520, BURST_MS = 640, COUNTER_MS = 700;
     /** A flight's first part lifts the card off; its travel ends where the crossfade begins, at rest in its slot. */
@@ -51,6 +54,8 @@ public final class ArenaFx {
     /** Flight and bolt times grow and shrink with the way they go, against the window's height, and stay within these bounds. */
     private static final float SLOWEST = 1.35f, FASTEST = 0.8f;
     private static final int SPARKS = 9, SHARDS = 10;
+    /** How far into a countered spell's breaking up its card is let into its pile. */
+    private static final float SHATTER_HOLD = 0.55f;
 
     private static final Color S1 = new Color(), S2 = new Color(), S3 = new Color();
     private static final Color WARM = ArenaTheme.rgb(0xFFE3A8);
@@ -73,9 +78,16 @@ public final class ArenaFx {
         final Rectangle from = new Rectangle(), to = new Rectangle();
         boolean flip;           // back first, face second
         float lean;             // the lean of the slot it flies into (degrees), settled into as it lands
-        float lift = 0.26f;     // how high the arc rises, as a share of the card's height
+        float lift = LIFT;      // how high the arc rises, as a share of the card's height
         float seed;
         boolean accent;         // a stack flight: its ring of light has been set off
+        boolean deal;           // part of the opening deal: a tap on one finishes them all
+        boolean handed;         // its view has taken over (the crossfade began) and been told so
+        long followFrame;       // the last frame its view followed it (0: nothing follows it); a flight nobody follows any more fades out where it is
+        PlayerView destOwner;   // a flight to a pile or a hand, or a shatter: whose, and which zone, so that the pile can hold the card back until it lands
+        ZoneType destZone;
+        float startT;           // where its progress began: a retargeted flight starts again from the air, not from the table
+        float poseX, poseY, poseH, poseW; // where its card was drawn last (centre and size), for a retarget or a fade in place
 
         /** Whether the card it stands for must stay hidden (its view draws a ghost): waiting or in the air, not yet crossfading. */
         boolean hidesTarget() {
@@ -150,8 +162,12 @@ public final class ArenaFx {
     }
 
     /** A countered spell breaking up into shards where it stood. */
-    static void shatter(final float x, final float y, final float size) {
-        timed(SHATTER, x, y, size, COUNTER, COUNTER_MS);
+    static void shatter(final float x, final float y, final float size, final PlayerView owner) {
+        final Fx e = timed(SHATTER, x, y, size, COUNTER, COUNTER_MS);
+        if (e != null && owner != null) {
+            e.destOwner = owner; // the card is in the graveyard already: the pile holds it back until it has broken up
+            e.destZone = ZoneType.Graveyard;
+        }
     }
 
     /** How long a flight or bolt over {@code dist} takes against a base time: longer for a longer way, within bounds. */
@@ -176,8 +192,11 @@ public final class ArenaFx {
     }
 
     /** A bolt of this colour from where something resolved to what it aims at; it bursts there when it arrives. */
-    static void bolt(final float x, final float y, final float tx, final float ty, final Color color, final float size) {
+    static void bolt(final float x, final float y, final float tx, final float ty, final Color color, final float size, final Runnable arrived) {
         if (!on() || fx.size() >= MAX_EFFECTS) {
+            if (arrived != null) {
+                arrived.run(); // no bolt to wait for
+            }
             return;
         }
         final Fx e = new Fx();
@@ -195,6 +214,9 @@ public final class ArenaFx {
         e.tween = ArenaMotion.play(scaled(BOLT_MS, (float) Math.hypot(tx - x, ty - y)), ArenaMotion.LINEAR, t -> e.t = t, () -> {
             fx.remove(e);
             burst(tx, ty, size * 0.8f, e.color);
+            if (arrived != null) {
+                arrived.run(); // what it hit takes its damage now
+            }
         });
     }
 
@@ -235,14 +257,86 @@ public final class ArenaFx {
             stackFlights.put(id, e);
         }
         final float dist = (float) Math.hypot(to.x + to.width / 2f - from.x - from.width / 2f, to.y + to.height / 2f - from.y - from.height / 2f);
-        e.tween = ArenaMotion.play(scaled(millis, dist), delayMs, ArenaMotion.LINEAR, t -> {
-            e.t = t;
-            if (e.cat == CAT_STACK && !e.accent && t >= CROSSFADE_FROM) { // it touched down on the stack: its one ring of light
+        startTween(e, scaled(millis, dist), delayMs);
+        return e;
+    }
+
+    /** Runs the flight's progress from where it starts ({@link Fx#startT}) to 1 over the given time. */
+    private static void startTween(final Fx e, final int millis, final int delayMs) {
+        final float begin = e.startT;
+        e.tween = ArenaMotion.play(millis, delayMs, ArenaMotion.LINEAR, t -> {
+            e.t = begin + (1f - begin) * t;
+            if (e.cat == CAT_STACK && !e.accent && e.t >= CROSSFADE_FROM) { // it touched down on the stack: its one ring of light
                 e.accent = true;
                 ripple(e.to.x + e.to.width / 2f, e.to.y + e.to.height * 0.7f, Math.max(e.to.width, ArenaTheme.px(60)) * 0.9f, e.color);
             }
         }, () -> forget(e));
-        return e;
+    }
+
+    /**
+     * The card this flight stands for has a new place while it is on its way: it carries on from where it is now to
+     * the new place, instead of jumping there. A flight that has not left yet just aims at the new place.
+     */
+    static void retarget(final Fx e, final Rectangle to) {
+        if (e == null || to == null || to.width <= 0) {
+            return;
+        }
+        if (e.t <= 0f || e.poseH <= 0f) {
+            e.to.set(to);
+            return;
+        }
+        final float dist = (float) Math.hypot(to.x + to.width / 2f - e.poseX, to.y + to.height / 2f - e.poseY);
+        e.from.set(e.poseX - e.poseW / 2f, e.poseY - e.poseH / 2f, e.poseW, e.poseH);
+        e.to.set(to);
+        e.startT = LIFT_END; // it is in the air already: no new lift-off
+        e.t = LIFT_END;
+        e.handed = false;
+        if (e.tween != null) {
+            e.tween.cancel();
+        }
+        startTween(e, Math.max(220, scaled(BACK_MS, dist)), 0);
+    }
+
+    /** What the flight stood for is gone (played, discarded, bounced elsewhere): it fades out where it is, in a moment. */
+    static void fadeOutInPlace(final Fx e) {
+        if (e == null || e.t >= CROSSFADE_FROM) {
+            return;
+        }
+        if (e.poseH > 0f) {
+            e.from.set(e.poseX - e.poseW / 2f, e.poseY - e.poseH / 2f, e.poseW, e.poseH);
+            e.to.set(e.from);
+        }
+        e.startT = CROSSFADE_FROM;
+        e.t = CROSSFADE_FROM;
+        e.handed = true;
+        if (e.tween != null) {
+            e.tween.cancel();
+        }
+        startTween(e, 180, 0);
+    }
+
+    /** Tells the flight its view is still following it this frame (a flight nobody follows any more fades out where it is). */
+    static void followed(final Fx e) {
+        e.followFrame = ArenaMotion.frame();
+    }
+
+    /**
+     * How many cards are on their way to this player's pile (or hand, for an opponent) and not shown there yet: a
+     * flight that has not landed, or a countered spell still breaking up. The pile holds them back (its count and its
+     * top card) until they land, so a card never sits in the pile and in the air at once.
+     */
+    public static int inboundTo(final PlayerView owner, final ZoneType zone) {
+        int n = 0;
+        for (int i = 0, m = fx.size(); i < m; i++) {
+            final Fx e = fx.get(i);
+            if (e.destOwner != owner || e.destZone != zone) {
+                continue;
+            }
+            if (e.kind == FLIGHT && e.t < CROSSFADE_FROM || e.kind == SHATTER && e.t < SHATTER_HOLD) {
+                n++;
+            }
+        }
+        return n + forge.screens.match.CardFlightOverlay.inboundTo(owner, zone);
     }
 
     private static void forget(final Fx e) {
@@ -301,8 +395,12 @@ public final class ArenaFx {
             return;
         }
         // flights under rings and sparks, so a landing's light is on top of the card
+        final long frame = ArenaMotion.frame();
         for (int i = 0, n = fx.size(); i < n; i++) {
             final Fx e = fx.get(i);
+            if (e.kind == FLIGHT && e.followFrame != 0L && e.t < CROSSFADE_FROM && frame - e.followFrame > 4L) {
+                fadeOutInPlace(e); // its view stopped following it (the card went elsewhere): it fades out where it is
+            }
             if (e.kind == FLIGHT && e.t > 0f) {
                 drawFlight(g, e);
             }
@@ -340,7 +438,7 @@ public final class ArenaFx {
             final float a = e.seed + i * (6.2831f / SPARKS) + (i % 2) * 0.28f;
             final float far = e.size * (0.45f + 0.35f * ((i * 37) % 10) / 10f) * out, near = far * (0.35f + 0.4f * e.t);
             final float cos = (float) Math.cos(a), sin = (float) Math.sin(a);
-            g.drawLine(Math.max(1.5f, e.size * 0.035f * fade), streak, e.x + cos * near, e.y + sin * near, e.x + cos * far, e.y + sin * far);
+            g.fillSmoothCapsule(streak, e.x + cos * near, e.y + sin * near, e.x + cos * far, e.y + sin * far, Math.max(1.5f, e.size * 0.035f * fade));
         }
     }
 
@@ -371,64 +469,90 @@ public final class ArenaFx {
             final float sx = e.x + (float) Math.cos(a) * dist, sy = e.y + (float) Math.sin(a) * dist * 0.8f + fall;
             final float r = e.size * (0.05f + 0.035f * ((i * 31) % 7) / 7f) * (1f - 0.4f * e.t), spin = a + e.t * (3f + i % 3);
             final float c1 = (float) Math.cos(spin), s1 = (float) Math.sin(spin);
-            g.fillTriangle(ArenaTheme.alpha(ArenaTheme.mix(e.color, ArenaTheme.WHITE, 0.25f * (i % 3), S2), 0.9f * fade, S3), sx + c1 * r * 1.6f, sy + s1 * r * 1.6f,
-                    sx - s1 * r, sy + c1 * r, sx + s1 * r * 0.6f, sy - c1 * r * 0.6f);
+            g.fillSmoothWedge(ArenaTheme.alpha(ArenaTheme.mix(e.color, ArenaTheme.WHITE, 0.25f * (i % 3), S2), 0.9f * fade, S3), sx - c1 * r * 0.9f, sy - s1 * r * 0.9f, sx + c1 * r * 1.6f, sy + s1 * r * 1.6f, r * 0.9f);
         }
     }
 
-    /** Eases out and settles with a small overshoot (about 2%) before it rests. */
-    private static float settle(final float t) {
-        final float c = 0.8f, u = t - 1f;
-        return 1f + (c + 1f) * u * u * u + c * u * u;
+    /**
+     * How far along its way a flight is at {@code ts} (0..1 of its travel): it leaves slowly, quickens, and eases out
+     * into its place with a small overshoot (about 2%) before it rests, so cards neither start with a jerk nor stop
+     * dead. Every card that flies in the Arena look moves by this.
+     */
+    static float flightEase(final float ts) {
+        final float c = ArenaMotion.clamp01(ts);
+        final float launch = ArenaMotion.lerp(c * c, ArenaMotion.OUT.at(c), c); // starts like c squared, finishes like cubic out
+        return launch + 0.03f * (float) Math.sin(Math.PI * ArenaMotion.clamp01((c - 0.55f) / 0.45f));
     }
 
-    /**
-     * One flight. Its first tenth lifts the card off the table; then it travels, rising and coming down again along an
-     * arc driven by how far along it has got (zero at the end), rolling a little with its speed, and is at rest in its
-     * slot when the crossfade begins, so the two images never differ in place.
-     */
+    /** The flight's own drawing: the shared pose with this effect's own state (and what it remembers of where it was drawn). */
     private static void drawFlight(final Graphics g, final Fx e) {
-        final float t = e.t;
+        POSE[0] = 0f;
+        drawPose(g, e.card, e.owner, e.color, e.from, e.to, e.t, e.startT, e.flip, e.lean, e.lift, POSE);
+        if (POSE[0] > 0f) {
+            e.poseX = POSE[1];
+            e.poseY = POSE[2];
+            e.poseW = POSE[3];
+            e.poseH = POSE[4];
+        }
+    }
+
+    private static final float[] POSE = new float[5];
+
+    /**
+     * One card in flight, the way every card flies in the Arena look. Its first tenth lifts it off the table; then it
+     * travels, rising and coming down again along an arc driven by how far along it has got (zero at the end), rolling
+     * a little with its speed, with a shadow on the table that softens as it rises, and is at rest in its slot when the
+     * crossfade begins, so the two images never differ in place. It fades in at the start and, over the real card
+     * drawn again by its own view, out at the end.
+     *
+     * @param card   the face it turns up, or null for a back all the way
+     * @param t      plain progress 0..1 (the lift-off, the travel, the crossfade at the end)
+     * @param startT where the progress began (above 0 for a flight that was retargeted in the air: no new fade-in)
+     * @param flip   turns over (back first) in the first two thirds of the travel
+     * @param lean   the lean of the place it lands in (degrees), settled into as it lands
+     * @param pose   when given, [0] set to 1 and [1..4] the centre and size the card was drawn at
+     */
+    public static void drawPose(final Graphics g, final CardView card, final PlayerView owner, final Color color, final Rectangle from, final Rectangle to,
+            final float t, final float startT, final boolean flip, final float lean0, final float lift, final float[] pose) {
         final float ts = ArenaMotion.clamp01((t - LIFT_END) / (CROSSFADE_FROM - LIFT_END));
-        final float p = settle(ts), travel = ArenaMotion.clamp01(p);
-        final float h = ArenaMotion.lerp(e.from.height, e.to.height, p), w = ArenaMotion.lerp(e.from.width, e.to.width, p);
-        final float fcx = e.from.x + e.from.width / 2f, fcy = e.from.y + e.from.height / 2f;
-        final float tcx = e.to.x + e.to.width / 2f, tcy = e.to.y + e.to.height / 2f;
+        final float p = flightEase(ts), travel = ArenaMotion.clamp01(p);
+        final float h = ArenaMotion.lerp(from.height, to.height, p), w = ArenaMotion.lerp(from.width, to.width, p);
+        final float fcx = from.x + from.width / 2f, fcy = from.y + from.height / 2f;
+        final float tcx = to.x + to.width / 2f, tcy = to.y + to.height / 2f;
         final float dist = (float) Math.hypot(tcx - fcx, tcy - fcy);
         final float arc = (float) Math.sin(Math.PI * travel);
-        final float rise = Math.min(h * e.lift * 1.6f, dist * 0.3f) * arc + h * 0.06f * (float) Math.sin(Math.PI * ArenaMotion.clamp01(t / (LIFT_END * 2.2f)));
+        final float rise = Math.min(h * lift * 1.6f, dist * 0.3f) * arc + h * 0.06f * (float) Math.sin(Math.PI * ArenaMotion.clamp01((t - startT) / (LIFT_END * 2.2f)));
         final float gx = ArenaMotion.lerp(fcx, tcx, p), gy = ArenaMotion.lerp(fcy, tcy, p); // the point on the table below the card
         final float cx = gx, cy = gy - rise;
         // nearer the viewer in the air, turning over (back first) in the first two thirds of its travel
         final float air = 1f + 0.14f * arc;
-        final float flipT = e.flip ? ArenaMotion.clamp01(ts / 0.66f) : 1f;
+        final float flipT = flip ? ArenaMotion.clamp01(ts / 0.66f) : 1f;
         final float squash = Math.max(0.04f, (float) Math.abs(Math.cos(Math.PI * flipT)));
-        final boolean showBack = e.card == null || e.flip && flipT < 0.5f;
+        final boolean showBack = card == null || flip && flipT < 0.5f;
         final float cw = w * air, ch = h * air;
-        final float drawW = e.flip ? cw * squash : cw;
+        final float drawW = flip ? cw * squash : cw;
         final float x = cx - drawW / 2f, y = cy - ch / 2f;
-        // it fades in at the start and, over the real card drawn again by its own view, out at the end
         final float cross = ArenaMotion.SMOOTH.at(ArenaMotion.unlerp(CROSSFADE_FROM, 1f, t));
         final float old = g.getfloatAlphaComposite();
         boolean turned = false;
         try {
-            g.setAlphaComposite(old * ArenaMotion.clamp01(t / 0.06f) * (1f - cross));
+            g.setAlphaComposite(old * (startT > 0f ? 1f : ArenaMotion.clamp01(t / 0.06f)) * (1f - cross));
             // a shadow on the table: it stays under the card's place, and softens, spreads and fades as the card rises
             final float spread = ArenaTheme.px(6) + rise * 0.5f;
             g.drawSoftShadow(ArenaTheme.alpha(ArenaTheme.BLACK, 0.62f - 0.3f * arc, S1), gx - w * 0.48f - ch * 0.01f, gy - h * 0.46f + ch * 0.03f + rise * 0.18f,
                     w * 0.96f, h * 0.96f, w * 0.045f, spread);
             // it settles into the lean of the slot it lands in, and rolls a little the way it goes, most when it is fastest
             final float roll = Math.signum(tcx - fcx) * 7f * arc * Math.min(1f, Math.abs(tcx - fcx) / (ArenaBoard.windowH() * 0.3f));
-            final float lean = e.lean * p + roll;
+            final float lean = lean0 * p + roll;
             turned = Math.abs(lean) > 0.05f;
             if (turned) {
                 g.startRotateTransform(x + drawW / 2f, y + ch, -lean);
             }
             if (showBack) {
-                ArenaCards.drawCardBack(g, e.owner, x, y, drawW, ch, Math.max(ArenaTheme.px(3), drawW / 18f), false);
+                ArenaCards.drawCardBack(g, owner, x, y, drawW, ch, Math.max(ArenaTheme.px(3), drawW / 18f), false);
             } else {
-                CardRenderer.drawCard(g, e.card, x, y, drawW, ch, CardStackPosition.Top);
-                g.drawSmoothRoundRect(Math.max(1f, ch * 0.006f), ArenaTheme.alpha(e.color, 0.7f * (1f - travel), S1), x, y, drawW, ch, drawW * 0.045f);
+                CardRenderer.drawCard(g, card, x, y, drawW, ch, CardStackPosition.Top);
+                g.drawSmoothRoundRect(Math.max(1f, ch * 0.006f), ArenaTheme.alpha(color, 0.7f * (1f - travel), S1), x, y, drawW, ch, drawW * 0.045f);
             }
         } finally {
             if (turned) {
@@ -436,6 +560,18 @@ public final class ArenaFx {
             }
             g.setAlphaComposite(old);
         }
+        if (pose != null) {
+            pose[0] = 1f;
+            pose[1] = cx;
+            pose[2] = cy;
+            pose[3] = cw;
+            pose[4] = ch;
+        }
+    }
+
+    /** The share of a flight's way it has made at plain progress {@code t}, for a view that draws a flight's end itself. */
+    public static float crossfade(final float t) {
+        return ArenaMotion.SMOOTH.at(ArenaMotion.unlerp(CROSSFADE_FROM, 1f, t));
     }
 
     /** A card's height as the hand fan draws it, for flights that have to guess it before the fan has laid the card out. */

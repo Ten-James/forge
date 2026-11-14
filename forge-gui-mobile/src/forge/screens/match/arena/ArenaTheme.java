@@ -16,6 +16,7 @@ import forge.localinstance.properties.ForgePreferences.FPref;
 import forge.model.FModel;
 import forge.screens.FScreen;
 import forge.screens.match.MatchScreen;
+import forge.util.InterfaceSize;
 
 /**
  * The Arena look for the libGDX match screen: whether it is on, its navy and gold palette, its sizes and its fonts.
@@ -192,13 +193,18 @@ public final class ArenaTheme {
     public static final float REFERENCE_HEIGHT = 1440f;
     private static final float MIN_SCALE = 0.75f, MAX_SCALE = 2.5f;
 
-    /** Window scale for Swing pixel values: 1 at 1440 logical px high, clamped to [0.75, 2.5]. */
+    /**
+     * Window scale for Swing pixel values: 1 at 1440 logical px high, clamped to [0.75, 2.5] (a small window keeps its
+     * controls big enough to hit, a huge one does not blow them up), times the Interface Size setting when that is a
+     * percentage (see {@link InterfaceSize#explicitFactor()}): on a big monitor 80% draws the whole board's text and controls
+     * smaller, on a small touch screen 100% or more keeps them large.
+     */
     public static float scale() {
         final int h = Forge.getScreenHeight();
         if (h <= 0) {
             return 1f;
         }
-        return Math.max(MIN_SCALE, Math.min(MAX_SCALE, h / REFERENCE_HEIGHT));
+        return Math.max(MIN_SCALE, Math.min(MAX_SCALE, h / REFERENCE_HEIGHT)) * InterfaceSize.explicitFactor();
     }
 
     /** A Swing pixel size in this window's logical pixels. */
@@ -221,7 +227,11 @@ public final class ArenaTheme {
         return fontPx(Math.round(px(swingSize)));
     }
 
-    /** A font of this many logical pixels (already scaled). */
+    /**
+     * A font of this many logical pixels (already scaled). This is the one place that limits a size: the font system's
+     * smallest face is 8 px and anything above its largest is the largest scaled up, so callers pass what they need and
+     * do not cap or floor it themselves.
+     */
     public static FSkinFont fontPx(final int pixels) {
         return FSkinFont._get(Math.max(8, pixels));
     }

@@ -53,7 +53,7 @@ public final class ArenaCurtain {
      * board is laid out over a few frames). True if a curtain this put up now covers the window.
      */
     public static boolean cover() {
-        if (!ArenaTheme.isActive() || holding || !capture(null)) {
+        if (!ArenaTheme.isEffectsOn() || holding || !capture(null)) { // reduce motion: screens and dialogs just cut, no fade over the old picture
             return false;
         }
         holding = true;
@@ -81,7 +81,7 @@ public final class ArenaCurtain {
 
     /** {@link #fadeOver(int)} after holding the picture for {@code delayMillis} (time for what is beneath to settle). */
     public static boolean fadeOver(final int millis, final int delayMillis) {
-        if (!ArenaTheme.isActive() || holding || !capture(null)) {
+        if (!ArenaTheme.isEffectsOn() || holding || !capture(null)) {
             return false;
         }
         startFade(millis, delayMillis);
@@ -103,7 +103,7 @@ public final class ArenaCurtain {
 
     /** A picture of this part of the window (Forge coordinates of the whole screen) fading away in its place. */
     public static boolean fadeOut(final float x, final float y, final float w, final float h, final int millis) {
-        if (!ArenaTheme.isActive() || holding || w <= 0 || h <= 0 || !capture(new Rectangle(x, y, w, h))) {
+        if (!ArenaTheme.isEffectsOn() || holding || w <= 0 || h <= 0 || !capture(new Rectangle(x, y, w, h))) {
             return false;
         }
         startFade(millis, 0);

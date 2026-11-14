@@ -162,8 +162,12 @@ public final class ArenaFocusView extends FOverlay {
         lw = -1; // lay out again for the new cards
         onCardChanged();
         if (!wasOpen) {
-            entrance.set(0f);
-            entrance.to(1f, OPEN_MS, 0, ArenaMotion.OUT, null);
+            if (ArenaTheme.isEffectsOn()) {
+                entrance.set(0f);
+                entrance.to(1f, OPEN_MS, 0, ArenaMotion.OUT, null);
+            } else {
+                entrance.set(1f); // reduce motion: it is simply there
+            }
             show();
         }
         ArenaMotion.requestFrame();
@@ -216,6 +220,12 @@ public final class ArenaFocusView extends FOverlay {
                 return;
             }
         }
+        if (!ArenaTheme.isEffectsOn()) { // reduce motion: the card shows its other face at once, no turning over
+            altState = !altState;
+            details.forCard(cards.get(index), altState, handler == null ? null : handler.getActivateAction(index));
+            lw = -1;
+            return;
+        }
         flipSwapped = false;
         flip.set(0f);
         flip.to(1f, FLIP_MS, 0, ArenaMotion.IN_OUT, () -> flip.set(0f));
@@ -238,8 +248,12 @@ public final class ArenaFocusView extends FOverlay {
         if (next == index || next < 0 || next >= cards.size()) {
             return;
         }
-        slide.set(next > index ? 1f : -1f);
-        slide.to(0f, STEP_MS, 0, ArenaMotion.OUT, null);
+        if (ArenaTheme.isEffectsOn()) { // reduce motion: the next card is simply there, no slide
+            slide.set(next > index ? 1f : -1f);
+            slide.to(0f, STEP_MS, 0, ArenaMotion.OUT, null);
+        } else {
+            slide.set(0f);
+        }
         index = next;
         altState = false;
         flip.set(0f);
@@ -726,10 +740,10 @@ public final class ArenaFocusView extends FOverlay {
             laidW = panel.width;
             laidH = panel.height;
             final float pad = ArenaTheme.px(PAD), room = panel.width - 2 * pad;
-            nameFont = ArenaTheme.fontPx(Math.min(72, Math.round(h * 0.032f)));
+            nameFont = ArenaTheme.fontPx(Math.round(h * 0.032f));
             typeFont = ArenaTheme.fontPx(Math.round(h * 0.02f));
             chipFont = ArenaTheme.fontPx(Math.round(h * 0.016f));
-            statsFont = ArenaTheme.fontPx(Math.min(72, Math.round(h * 0.03f)));
+            statsFont = ArenaTheme.fontPx(Math.round(h * 0.03f));
             costW = cost.isEmpty() ? 0f : costText.getBounds(cost, nameFont).width;
             chipH = chipFont.getLineHeight() + ArenaTheme.px(6);
             int rows = 0;

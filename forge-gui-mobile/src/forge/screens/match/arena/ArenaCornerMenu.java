@@ -136,6 +136,13 @@ public final class ArenaCornerMenu extends FDisplayObject {
                     FSkinImage.HDLIBRARY, e -> toggleLog()));
             addItem(new FMenuItem(Forge.getLocalizer().getMessage("lblStack") + "  [" + ArenaShortcuts.keyLabels(ArenaShortcuts.Action.OPEN_STACK) + "]",
                     FSkinImage.HDEXILE, e -> toggleStack()));
+            // the F2 shortcut for a touch screen: only while there is something to pass on
+            final FMenuItem passStack = new FMenuItem(Forge.getLocalizer().getMessageorUseDefault("lblArenaKeyPassStack", "Pass until the stack resolves")
+                    + "  [" + ArenaShortcuts.keyLabels(ArenaShortcuts.Action.PASS_UNTIL_STACK_RESOLVES) + "]", FSkinImage.HDCHOICE,
+                    e -> screen.passUntilStackResolves());
+            final forge.game.GameView game = MatchController.instance.getGameView();
+            passStack.setEnabled(game != null && !game.getStack().isEmpty());
+            addItem(passStack);
             if (!MatchController.instance.getRevealedCards().isEmpty()) { //what has been revealed this game (the menu bar's reveal tab)
                 addItem(new FMenuItem(Forge.getLocalizer().getMessage("lblRevealed") + " (" + MatchController.instance.getRevealedCards().size() + ")",
                         FSkinImage.HDLIBRARY, e -> openDropDown(screen.getRevealed())));

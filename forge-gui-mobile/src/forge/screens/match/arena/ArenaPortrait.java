@@ -34,7 +34,8 @@ public final class ArenaPortrait implements ArenaSkin<VAvatar> {
         final ArenaMotion.Fade ringMix = new ArenaMotion.Fade(1f);
         int ring = -1, ringWas = -1;
         int lifeSeen = Integer.MIN_VALUE, lifeShown;
-        ArenaMotion.Tween lifeRoll, lifeHold;
+        ArenaMotion.Tween lifeRoll;
+        ArenaStackFx.Hold lifeHold; // a life change waiting for the bolt that causes it
         final ArenaMotion.Fade lifePop = new ArenaMotion.Fade(0f), lifeFlash = new ArenaMotion.Fade(0f), floatUp = new ArenaMotion.Fade(1f);
         boolean flashLost;
         String floatText;
@@ -104,7 +105,7 @@ public final class ArenaPortrait implements ArenaSkin<VAvatar> {
         }
 
         // the life total: it counts its way to the new figure, the plate jumps, the ring flashes, the difference floats off
-        noticeLife(st, player.getLife(), ArenaStackFx.holdMs(player));
+        noticeLife(st, player, player.getLife());
         final float flash = st.lifeFlash.get();
         if (flash > 0f) {
             ArenaArt.portraitRing(g, cx, cy, d, st.flashLost ? LIFE_LOST : LIFE_GAINED, flash);
@@ -240,7 +241,7 @@ public final class ArenaPortrait implements ArenaSkin<VAvatar> {
      * With reduce motion it just changes. While an instant or sorcery is on its way to this player, all that waits for
      * its bolt to arrive (the old figure stays up meanwhile).
      */
-    private static void noticeLife(final State st, final int life, final int holdMs) {
+    private static void noticeLife(final State st, final PlayerView player, final int life) {
         if (st.lifeSeen != Integer.MIN_VALUE && life != st.lifeSeen) {
             final int delta = life - st.lifeSeen;
             if (st.lifeHold != null) { // a newer change while one waits: the waiting one happens now, with this
@@ -253,13 +254,12 @@ public final class ArenaPortrait implements ArenaSkin<VAvatar> {
                     st.lifeRoll = null;
                 }
                 st.lifeShown = life;
-            } else if (holdMs > 0) {
-                st.lifeHold = ArenaMotion.play(holdMs, ArenaMotion.LINEAR, null, () -> {
+            } else {
+                // while an instant or sorcery is on its way to this player the change waits for its bolt to arrive (else it starts now)
+                st.lifeHold = ArenaStackFx.whenHit(player, () -> {
                     st.lifeHold = null;
                     startLifeChange(st, life, delta);
                 });
-            } else {
-                startLifeChange(st, life, delta);
             }
         } else if (st.lifeHold == null && (st.lifeRoll == null || st.lifeRoll.isOver())) {
             st.lifeShown = life;

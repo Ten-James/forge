@@ -1291,6 +1291,18 @@ public class MatchScreen extends FScreen {
         return attached != null && attached.iterator().hasNext();
     }
 
+    /** Pass priority until the stack has resolved (F2, or the gear menu's entry, which is the way to it on a touch screen). False when the stack is empty. */
+    public boolean passUntilStackResolves() {
+        final IGameController controller = getGameController();
+        final PlayerView local = MatchController.instance.getCurrentPlayer();
+        final GameView gameView = MatchController.instance.getGameView();
+        if (controller == null || local == null || gameView == null || gameView.getStack().isEmpty()) {
+            return false;
+        }
+        controller.sendYieldUpdate(new YieldUpdate.StackYield(local, true, true));
+        return true;
+    }
+
     /**
      * The keyboard shortcuts the Arena look adds ({@link ArenaShortcuts}, those not {@code existing}); the ones keyDown
      * already had stay in its switch, so both looks answer them the same way. Z zooms the card under the pointer.
@@ -1301,16 +1313,8 @@ public class MatchScreen extends FScreen {
             return false;
         }
         switch (action) {
-            case PASS_UNTIL_STACK_RESOLVES: {
-                final IGameController controller = getGameController();
-                final PlayerView local = MatchController.instance.getCurrentPlayer();
-                final GameView gameView = MatchController.instance.getGameView();
-                if (controller == null || local == null || gameView == null || gameView.getStack().isEmpty()) {
-                    return false;
-                }
-                controller.sendYieldUpdate(new YieldUpdate.StackYield(local, true, true));
-                return true;
-            }
+            case PASS_UNTIL_STACK_RESOLVES:
+                return passUntilStackResolves();
             case PASS_UNTIL_MY_TURN:
                 MatchController.toggleYieldMarker(MatchController.instance.getCurrentPlayer(), PhaseType.UPKEEP);
                 return true;
@@ -1360,8 +1364,9 @@ public class MatchScreen extends FScreen {
     }
 
     /**
-     * A right click on the Arena board away from any card backs out: it closes an open menu, or cancels the decision
-     * being made (never ends the turn: the priority prompt's End Turn is not a way back).
+     * A right click on the Arena board away from any card backs out: it closes an open menu, or, on a second right click
+     * within a moment, cancels the decision being made (the first only asks; never ends the turn: the priority prompt's
+     * End Turn is not a way back).
      */
     public boolean arenaBackOut() {
         if (cornerMenu.closeMenus()) {
@@ -1369,7 +1374,8 @@ public class MatchScreen extends FScreen {
         }
         final VPrompt prompt = getActivePrompt();
         if (prompt.getArenaMode() == forge.screens.match.arena.ArenaMatchLayout.PromptMode.DECISION && prompt.getBtnCancel().isEnabled()) {
-            return prompt.getBtnCancel().trigger();
+            // a right click that missed a card must not quietly drop the decision: the first only asks (the Cancel button says so), the second cancels
+            return forge.screens.match.arena.ArenaPrompt.confirmBackOut() && prompt.getBtnCancel().trigger();
         }
         return false;
     }

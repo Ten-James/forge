@@ -132,8 +132,9 @@ public class VStack extends FDropDown {
     private void arenaSendOffLeavers(FCollectionView<StackItemView> stack) {
         ArenaStackFx.stackSynced(stack, (item, card, where) -> {
             if (!item.isAbility() && where.width > 0 && !CardFlightOverlay.isLeavingStack(card.getId())) {
-                CardFlightOverlay.startArenaStackLeave(card, where);
+                return CardFlightOverlay.startArenaStackLeave(card, where);
             }
+            return null;
         });
     }
 
@@ -674,7 +675,7 @@ public class VStack extends FDropDown {
 
         @Override
         public boolean tap(float x, float y, int count) {
-            if (ArenaStackFx.reveal(stackInstance)) {
+            if (Forge.mouseButtonID != com.badlogic.gdx.Input.Buttons.RIGHT && ArenaStackFx.reveal(stackInstance)) { //a right click still opens the card, flying or not
                 return true; //an entry still flying in: the touch only shows it in its place
             }
             if (isSelectableTarget()) { // a stack target is being chosen: tapping the entry picks (or unpicks) it

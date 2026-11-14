@@ -7,7 +7,7 @@ package forge.util;
  * window. On a big monitor that makes every label and button several times the size a desktop program uses. The
  * setting scales that down: at 75% a 1440 px window is laid out like a 1080 px one (640 points tall instead of 480), so
  * the same screens show more and draw everything smaller. Layouts that size themselves from the window (the Arena match
- * board) are not affected.
+ * board) follow an explicit percentage ({@link #explicitFactor()}) but not Auto: they already scale with the window.
  * <p>
  * Read once at start-up, before {@link Utils} is first used; changing it takes a restart.
  */
@@ -25,6 +25,10 @@ public final class InterfaceSize {
     /** Sets the size the interface is drawn at (desktop launcher, before the window opens). */
     public static void set(String value) {
         setting = value == null || value.isEmpty() ? AUTO : value;
+        explicit = 1f;
+        if (!AUTO.equalsIgnoreCase(setting)) {
+            explicit = factor(startHeight);
+        }
     }
 
     /** The setting as chosen ("Auto" or a percentage). */
@@ -46,6 +50,16 @@ public final class InterfaceSize {
         } catch (NumberFormatException e) {
             return 1f;
         }
+    }
+
+    private static float explicit = 1f; // read all the time by the Arena board's sizes: worked out when the setting is set
+
+    /**
+     * The factor for layouts that size themselves from the window (the Arena board): the chosen percentage, or 1 for Auto
+     * (they follow the window's height already, so Auto must not shrink them a second time).
+     */
+    public static float explicitFactor() {
+        return explicit;
     }
 
     /** "Auto (75%)" for the Auto setting at the height the window had at start-up, the percentage otherwise. */

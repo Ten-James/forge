@@ -33,7 +33,9 @@ import forge.gui.GuiBase;
  * worker thread (nothing of GL is touched there) and uploaded on the render thread when they are ready, so frames are
  * never spent on it, whatever the refresh rate. When a new size or mood is ready it fades in over the old picture; a
  * plain gradient stands in until the first one exists. A size is only baked once the window has held still for a
- * moment. The texture is a managed one (a lost GL context brings it back), is kept from one match to the next, and is
+ * moment. On Android the texture is a managed one whose pixmap is kept (a lost GL context brings it back); on the desktop it is
+ * filled strip by strip and its pixmap let go (an ordinary texture: a lost context is not something that happens there). It
+ * is kept from one match to the next, and is
  * let go when the Arena look or the clean board is turned off ({@link #release}). Nothing is allocated per frame.</p>
  */
 public final class ArenaTableBoard {
@@ -52,7 +54,7 @@ public final class ArenaTableBoard {
     /** Where the key light lands on the screen (shares of the window). */
     private static final float LIGHT_X = 0.46f, LIGHT_Y = 0.42f;
     /** The carved ring in the middle of the table: a flat ellipse on the screen, in window heights, around the board's medallion. */
-    private static final float RING_X = 0.2f, RING_Y = 0.085f, RING_AT = 0.42f;
+    private static final float RING_X = 0.2f, RING_Y = 0.085f, RING_AT = ArenaTheme.FIELD_SPLIT; // centred on the seam between the halves
     /** The seam between the halves (the board's field split), and how wide the aspect has to be for the side lights to be at full strength. */
     private static final float SEAM = ArenaTheme.FIELD_SPLIT;
 
@@ -141,7 +143,7 @@ public final class ArenaTableBoard {
         }
     }
 
-    private static Pixmap pixmap;   // what the texture shows (kept: the texture is managed)
+    private static Pixmap pixmap;   // what the texture shows, kept only on Android (a managed texture); null on the desktop
     private static Texture texture;
     private static ArenaTheme.BoardVariant shownMood;
     private static int shownW, shownH;
@@ -252,6 +254,7 @@ public final class ArenaTableBoard {
         final Texture t = new Texture(new GLOnlyTextureData(j.w, j.h, 0, GL20.GL_RGBA, GL20.GL_RGBA, GL20.GL_UNSIGNED_BYTE));
         t.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
         upload = new Upload(j, t);
+        ArenaMotion.requestFrame(); // the strips go up one a frame: without this a still screen would never finish them
     }
 
     private static void stepUpload() {
@@ -381,24 +384,27 @@ public final class ArenaTableBoard {
         final float seam = (float) Math.exp(-seamD * seamD), seamGlow = (float) Math.exp(-Math.abs(v - SEAM) / 0.05f);
         final float sideShare = smooth(1.6f, 3.2f, aspect); // how wide the window is: 0 on 16:10, 1 on 32:9
         final float hazeK = haze * haze * 0.32f;
+        // the key light widens with the window: its pool is as wide a share of the width on 32:9 as on 16:10 (never narrower than 16:10 would make it)
+        final float lightSpan = Math.max(1.6f, Math.min(aspect, 1.6f + 0.15f * Math.max(0f, aspect - 1.6f)));
         for (int px = 0; px < pw; px++) {
             final float fx = (px + 0.5f) / pw;
             final float u = (fx - 0.5f) * aspect;                  // across, in window heights
             final float tx = u * z;                                // across, on the table
             // light: a broad pool from the key light, tighter in depth than across
-            final float lx = (fx - LIGHT_X) * aspect, ly = v - LIGHT_Y;
+            final float lx = (fx - LIGHT_X) * lightSpan, ly = v - LIGHT_Y;
             final float pool = Math.max(0f, 1f - (lx * lx * 0.45f + ly * ly * 1.7f) * 1.1f);
             final float lit = pool * pool * (3f - 2f * pool);
             // wide windows: the extra width is lit from the sides, in pools down each flank, instead of dark edges
             final float edgeDist = Math.min(fx, 1f - fx) * aspect;  // distance from the nearest side, in window heights
-            final float flank = sideShare * (float) Math.exp(-edgeDist * 1.4f) * Math.max(0f, 1f - Math.abs(v - 0.46f) * 1.5f);
+            final float band = edgeDist * 2f; // 1 half a window height in: the side light is a soft band there, not a peak at the very edge
+            final float flank = sideShare * band * (float) Math.exp(1f - band) * Math.max(0f, 1f - Math.abs(v - 0.46f) * 1.5f);
             // a light vignette; sideways it fades as the window widens (the flanks are lit instead)
             final float ex = Math.abs(fx - 0.5f) * 2f, ey = Math.abs(v - 0.5f) * 2f;
             final float edge = 1f - 0.14f * smooth(0.7f, 1.2f, (float) Math.sqrt(ex * ex * 0.6f * (1f - 0.8f * sideShare) + ey * ey * 0.8f));
             final float cx = fx - 0.97f, cy = v - 0.93f;
             final float corner = 1f - 0.22f * smooth(0.5f, 0f, (float) Math.sqrt(cx * cx * aspect * aspect + cy * cy)); // the action button's corner
             // the felt, from its dark to its lit tone
-            final float tone = Math.min(1f, 0.30f + lit * 0.8f + flank * 0.45f);
+            final float tone = Math.min(1f, 0.30f + lit * 0.8f + flank * 0.35f);
             float r = m.dark[0] + (m.lit[0] - m.dark[0]) * tone;
             float gr = m.dark[1] + (m.lit[1] - m.dark[1]) * tone;
             float b = m.dark[2] + (m.lit[2] - m.dark[2]) * tone;
@@ -422,7 +428,7 @@ public final class ArenaTableBoard {
             final float ringPx = Math.abs((float) Math.sqrt(rex * rex + rey * rey) - 1f) * RING_Y / invH * 0.9f;
             final float ring = coverage(ringPx, 2.2f) * 0.10f * (0.3f + lit);
             // the light itself warms the lit part, the flanks and the seam a little
-            final float glow = Math.min(0.6f, ring + lit * m.lightGain * 0.35f + flank * 0.22f + seam * 0.30f + seamGlow * 0.05f);
+            final float glow = Math.min(0.6f, ring + lit * m.lightGain * 0.35f + flank * 0.16f + seam * 0.30f + seamGlow * 0.05f);
             r = mixTo(r, m.light[0], glow);
             gr = mixTo(gr, m.light[1], glow);
             b = mixTo(b, m.light[2], glow);

@@ -181,6 +181,8 @@ public final class ArenaPlayerParts {
             return false;
         }
 
+        private final int[] held = new int[4]; // cards on their way to each pile, held back
+
         private CardView topCard(final int i) {
             final ZoneType zone = ZONES[i];
             if (zone == ZoneType.Library) {
@@ -189,6 +191,13 @@ public final class ArenaPlayerParts {
             final FCollectionView<CardView> cards = player.getCards(zone);
             if (cards == null || cards.isEmpty()) {
                 return null;
+            }
+            if (held[i] > 0 && zone != ZoneType.Command) { // the card under the ones still flying in
+                try {
+                    return cards.size() > held[i] ? cards.get(cards.size() - 1 - held[i]) : null;
+                } catch (final RuntimeException e) {
+                    return null; // changed under us; next frame
+                }
             }
             if (zone == ZoneType.Command && player.getCommanders() != null) {
                 // the commander rather than an emblem or effect that happens to be on top
@@ -215,7 +224,9 @@ public final class ArenaPlayerParts {
             final float mx = Forge.mouseMovedX - screenPos.x, my = Forge.mouseMovedY - screenPos.y;
             final boolean over = Forge.magnify && mx >= 0 && my >= 0 && mx < getWidth() && my < getHeight();
             for (int i = 0; i < ZONES.length; i++) {
-                final int n = count(i);
+                // cards still flying to the pile are not in it yet: not in its count, not its top card
+                held[i] = ZONES[i] == ZoneType.Library ? 0 : ArenaFx.inboundTo(player, ZONES[i]);
+                final int n = Math.max(0, count(i) - held[i]);
                 if (seen[i] >= 0 && n != seen[i]) {
                     bump[i].set(1f);
                     bump[i].to(0f, 380);
@@ -429,7 +440,8 @@ public final class ArenaPlayerParts {
             if (!ArenaTheme.isActive()) {
                 return;
             }
-            final int count = player.getZoneSize(ZoneType.Hand);
+            // backs still flying into the hand are not in it yet
+            final int count = Math.max(0, player.getZoneSize(ZoneType.Hand) - ArenaFx.inboundTo(player, ZoneType.Hand));
             if (count == 0) {
                 return;
             }

@@ -201,14 +201,23 @@ public final class ArenaEndScreen {
     /** The view has been shown: the first time it waits a beat, then comes in over the board; later it comes back at once. */
     public void onShown() {
         if (arrived) {
-            fade.set(0.2f);
-            fade.to(1f, RETURN_MS, 0, ArenaMotion.LINEAR, null);
+            if (ArenaTheme.isEffectsOn()) {
+                fade.set(0.2f);
+                fade.to(1f, RETURN_MS, 0, ArenaMotion.LINEAR, null);
+            } else {
+                fade.set(1f); // reduce motion: it is simply there
+            }
             return;
         }
         if (beat != null) {
             return;
         }
         prepareArt();
+        if (!ArenaTheme.isEffectsOn()) { // reduce motion: no beat of waiting and no fade in
+            arrived = true;
+            fade.set(1f);
+            return;
+        }
         beat = ArenaMotion.play(BEAT_MS, ArenaMotion.LINEAR, null, () -> {
             beat = null;
             arrived = true;
@@ -349,7 +358,7 @@ public final class ArenaEndScreen {
             drawPortrait(g, cx, cy, d);
             drawBanner(g, cx, Math.round(h * BANNER_Y), w, h);
             if (!score.isEmpty()) {
-                final FSkinFont f = ArenaTheme.fontPx(Math.min(72, Math.round(h * 0.03f)));
+                final FSkinFont f = ArenaTheme.fontPx(Math.round(h * 0.03f));
                 final float lh0 = f.getLineHeight();
                 ArenaArt.textOutlined(g, score, f, SCORE, 0, Math.round(h * SCORE_Y - lh0 / 2f), w, lh0, Align.center);
             }
@@ -1170,7 +1179,7 @@ public final class ArenaEndScreen {
     // ---- the pills ----------------------------------------------------------------------------------------------------
 
     private static FSkinFont pillFont(final float h) {
-        return ArenaTheme.fontPx(Math.round(Math.min(h * 0.42f, 40f)));
+        return ArenaTheme.fontPx(Math.round(Math.min(h * 0.42f, ArenaTheme.px(40))));
     }
 
     /** One of the screen's buttons as an Arena pill, mirroring a button of the view (or standing alone). */
