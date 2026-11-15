@@ -228,6 +228,7 @@ public abstract class ArenaDialogOverlay extends FOverlay {
 
     @Override
     public boolean press(final float x, final float y) {
+        endPress(x, y); // never carry a press over into the next one
         pointerDown = true;
         pressedPill = pillAt(x, y);
         if (pressedPill != null) {
@@ -240,18 +241,31 @@ public abstract class ArenaDialogOverlay extends FOverlay {
         return true;
     }
 
+    /**
+     * The gesture adapter calls this when the finger lifts but also when it leaves the tap square to start a pan, with the
+     * finger still down; a drag must go on through that. So the press is not ended here but once it is known to be over:
+     * by the tap, the pan stopping, a long press or a pinch ({@link #endPress}).
+     */
     @Override
     public boolean release(final float x, final float y) {
-        pointerDown = false;
         if (pressedPill != null) {
+            pointerDown = false;
             pressedPill.pressed = false;
             pressedPill = null;
             return true;
         }
+        return true; // pointerDown stays: see endPress
+    }
+
+    /** The press is over for good: let go of whatever it held. */
+    private void endPress(final float x, final float y) {
+        if (!pointerDown) {
+            return;
+        }
+        pointerDown = false;
         if (!viewingBattlefield) {
             onRelease(x, y);
         }
-        return true;
     }
 
     @Override
@@ -274,6 +288,7 @@ public abstract class ArenaDialogOverlay extends FOverlay {
         if (!viewingBattlefield) {
             onTap(x, y, count);
         }
+        endPress(x, y);
         return true;
     }
 
@@ -288,6 +303,7 @@ public abstract class ArenaDialogOverlay extends FOverlay {
 
     @Override
     public boolean longPress(final float x, final float y) {
+        endPress(x, y); // a held card is let go of when it is zoomed
         if (!viewingBattlefield) {
             final CardView card = cardAt(x, y);
             if (card != null) {
@@ -315,6 +331,7 @@ public abstract class ArenaDialogOverlay extends FOverlay {
         if (!viewingBattlefield && pointerDown) {
             onDragEnd(x, y);
         }
+        endPress(x, y);
         return !viewingBattlefield;
     }
 
@@ -325,6 +342,7 @@ public abstract class ArenaDialogOverlay extends FOverlay {
 
     @Override
     public boolean zoom(final float x, final float y, final float amount) {
+        endPress(x, y); // a second finger ends the press
         return !viewingBattlefield;
     }
 
