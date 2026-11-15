@@ -755,11 +755,15 @@ public final class ArenaCards {
         // a face-down card has no name and no printed values to compare with (looking up "" throws in the card database)
         final String name = state.getName();
         if (state.isCreature() && !card.isToken() && !card.isFaceDown() && name != null && !name.isEmpty()) {
-            final PaperCard printed = FModel.getMagicDb().getCommonCards().getCard(name);
-            if (printed != null && printed.getRules() != null) {
-                if (state.getPower() > printed.getRules().getIntPower() || state.getToughness() > printed.getRules().getIntToughness()) {
-                    return STATS_BUFFED;
+            try {
+                final PaperCard printed = FModel.getMagicDb().getCommonCards().getCard(name);
+                if (printed != null && printed.getRules() != null) {
+                    if (state.getPower() > printed.getRules().getIntPower() || state.getToughness() > printed.getRules().getIntToughness()) {
+                        return STATS_BUFFED;
+                    }
                 }
+            } catch (final RuntimeException e) {
+                // a name the card database cannot look up must never take the draw loop down; plain stats it is
             }
         }
         return STATS_PLAIN;
