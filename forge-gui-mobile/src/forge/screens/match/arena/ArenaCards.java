@@ -625,15 +625,17 @@ public final class ArenaCards {
     /** The art crop, drained of colour and light as the tile taps; the sleeve for a card that cannot be seen. */
     private static void drawArt(final Graphics g, final CardView card, final boolean known, final float x, final float y, final float w,
             final float h, final float radius, final float tapAmount) {
+        // a face-down card shows the sleeve like a card that cannot be seen, not the default back picture cropped as art
+        final boolean shown = known && !card.isFaceDown();
         TextureRegion art = null;
-        if (known) {
+        if (shown) {
             final FImageComplex complex = CardRenderer.getCardArt(card);
             if (complex != null) {
                 art = complex.getTextureRegion();
             }
         }
         if (art == null) {
-            if (!known) {
+            if (!shown) {
                 drawCardBack(g, card.getOwner(), x, y, w, h, radius, false);
                 return;
             }
@@ -750,8 +752,10 @@ public final class ArenaCards {
         if (card.getDamage() > 0) {
             return STATS_DAMAGED;
         }
-        if (state.isCreature() && !card.isToken()) {
-            final PaperCard printed = FModel.getMagicDb().getCommonCards().getCard(state.getName());
+        // a face-down card has no name and no printed values to compare with (looking up "" throws in the card database)
+        final String name = state.getName();
+        if (state.isCreature() && !card.isToken() && !card.isFaceDown() && name != null && !name.isEmpty()) {
+            final PaperCard printed = FModel.getMagicDb().getCommonCards().getCard(name);
             if (printed != null && printed.getRules() != null) {
                 if (state.getPower() > printed.getRules().getIntPower() || state.getToughness() > printed.getRules().getIntToughness()) {
                     return STATS_BUFFED;

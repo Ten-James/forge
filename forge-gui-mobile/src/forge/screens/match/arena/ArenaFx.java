@@ -372,7 +372,11 @@ public final class ArenaFx {
         if (card != null) {
             final float old = g.getfloatAlphaComposite();
             g.setAlphaComposite(old * 0.42f * alpha);
-            CardRenderer.drawCard(g, card, x, y, w, h, CardStackPosition.Top);
+            if (card.isFaceDown() || !MatchController.instance.mayView(card)) { // the sleeve, as everywhere else
+                ArenaCards.drawCardBack(g, card.getOwner(), x, y, w, h, r, false);
+            } else {
+                CardRenderer.drawCard(g, card, x, y, w, h, CardStackPosition.Top);
+            }
             g.setAlphaComposite(old);
         }
         if (rim != null) {
@@ -528,7 +532,7 @@ public final class ArenaFx {
         final float air = 1f + 0.14f * arc;
         final float flipT = flip ? ArenaMotion.clamp01(ts / 0.66f) : 1f;
         final float squash = Math.max(0.04f, (float) Math.abs(Math.cos(Math.PI * flipT)));
-        final boolean showBack = card == null || flip && flipT < 0.5f;
+        final boolean showBack = card == null || flip && flipT < 0.5f || card.isFaceDown() || !MatchController.instance.mayView(card);
         final float cw = w * air, ch = h * air;
         final float drawW = flip ? cw * squash : cw;
         final float x = cx - drawW / 2f, y = cy - ch / 2f;
