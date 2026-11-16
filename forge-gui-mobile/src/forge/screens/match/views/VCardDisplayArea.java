@@ -938,6 +938,16 @@ public abstract class VCardDisplayArea extends VDisplayArea implements ActivateH
             return attachedPanels;
         }
 
+        private VField.Role groupRole; //what the card was doing when its field last grouped it into piles
+
+        VField.Role getGroupRole() {
+            return groupRole;
+        }
+
+        void setGroupRole(VField.Role role) {
+            groupRole = role;
+        }
+
         public CardAreaPanel getNextPanelInStack() {
             return nextPanelInStack;
         }
