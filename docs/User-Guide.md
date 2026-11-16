@@ -303,6 +303,8 @@ You can control the maximum number of cards included in a stack through the **Ma
 
 **What counts as identical for grouping:** name, power/toughness, counters, abilities, tapped state, damage, and the absence of attachments must all match. The moment any of these change for one card — it gets tapped, takes damage, gains a counter — that card splits out into its own pile. During combat, attackers and blockers with different combat assignments are also kept in separate piles so the targeting arrows are easier to follow.
 
+In the libGDX client (desktop and mobile), a pile also splits as you pick from it. Click a pile while declaring attackers and the token you send leaves the pile for a pile of attackers next to it, one pile per player or planeswalker you attack. In any prompt that asks you to pick cards (targets, cards to sacrifice, and so on), the tokens you have picked gather in a picked pile beside the rest. Let a token go again (call it back, unpick it, or end the prompt) and it rejoins its pile.
+
 **Interacting with a group:** the count badge and individual cards in a group respond to the following inputs.
 
 | Action                                       | Effect                                                                                                        |

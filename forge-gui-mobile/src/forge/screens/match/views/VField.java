@@ -1,7 +1,9 @@
 package forge.screens.match.views;
 
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+import forge.game.GameEntityView;
 import forge.game.card.CardView;
 import forge.game.card.CardView.CardStateView;
 import forge.game.combat.CombatView;
@@ -84,12 +86,17 @@ public class VField extends FContainer {
             Iterable<CardView> model = MatchController.instance.isNetGame()
                     ? battlefield.threadSafeIterable() : battlefield;
 
+            regroupPending.set(false); //this update regroups the field, so a regroup asked for before it is done
+            roles.clear();
             for (CardView card : model) {
                 CardAreaPanel cardPanel = CardAreaPanel.get(card);
                 cardPanel.updateCard(card);
                 // Clear all stacks since they will be rebuilt in the loop below.
                 cardPanel.setNextPanelInStack(null);
                 cardPanel.setPrevPanelInStack(null);
+                final Role role = Role.of(card);
+                roles.put(card, role);
+                cardPanel.setGroupRole(role);
             }
 
             List<CardView> contraptions = null; //Usually not used; create on demand.
@@ -99,21 +106,15 @@ public class VField extends FContainer {
                 CardStateView details = card.getCurrentState();
                 if (cardPanel.getAttachedToPanel() == null) { //skip attached panels
                     if (details.isCreature()) {
-                        if (!tryStackCard(card, creatures)) {
-                            creatures.add(card);
-                        }
+                        placeCard(card, creatures);
                     } else if (details.isLand()) {
-                        if (!tryStackCard(card, lands)) {
-                            lands.add(card);
-                        }
+                        placeCard(card, lands);
                     } else if (details.isArtifact() && (details.isContraption() || details.isAttraction())) {
                         if (contraptions == null)
                             contraptions = new ArrayList<>();
                         contraptions.add(card); //Arrange these later.
                     } else {
-                        if (!tryStackCard(card, otherPermanents)) {
-                            otherPermanents.add(card);
-                        }
+                        placeCard(card, otherPermanents);
                     }
                 }
             }
@@ -134,76 +135,118 @@ public class VField extends FContainer {
         }
     };
 
-    private boolean tryStackCard(CardView card, List<CardView> cardsOfType) {
+    /**
+     * Puts a card on top of the pile it belongs to, or starts a pile of its own. A pile split by what its cards are doing
+     * (some picked in the prompt, some attacking another defender) keeps its parts side by side: a new part goes right
+     * after the last part of the same pile.
+     */
+    private void placeCard(CardView card, List<CardView> cardsOfType) {
         if (card.hasCardAttachments()) {
-            return false; //can stack with enchanted or equipped card
+            cardsOfType.add(card); //can't stack with enchanted or equipped card
+            return;
         }
         CardStateView cardState = card.getCurrentState();
         if (!this.stackNonTokenCreatures && cardState.isCreature() && !card.isToken()) {
+            cardsOfType.add(card);
+            return;
+        }
+        final Role role = roles.get(card);
+        int lastPart = -1;
+        for (int i = 0; i < cardsOfType.size(); i++) {
+            final CardView c = cardsOfType.get(i);
+            if (!stacksWith(card, c)) {
+                continue;
+            }
+            if (Objects.equals(role, roles.get(c))) {
+                stackOnto(card, c);
+                return;
+            }
+            lastPart = i; //the same pile, but these cards do something else: stand beside it
+        }
+        cardsOfType.add(lastPart >= 0 ? lastPart + 1 : cardsOfType.size(), card);
+    }
+
+    /** Whether two cards look alike enough to share a pile, leaving aside what they are doing ({@link Role}). */
+    private static boolean stacksWith(CardView card, CardView c) {
+        final CardStateView cardState = card.getCurrentState();
+        final CardStateView cState = c.getCurrentState();
+        if (c.hasCardAttachments() || !cardState.getOracleName().equals(cState.getOracleName())) {
             return false;
         }
-        final String cardName = cardState.getOracleName();
-        for (CardView c : cardsOfType) {
-            CardStateView cState = c.getCurrentState();
-            if (cState.isCreature()) {
-                if (!c.hasCardAttachments() &&
-                        cardName.equals(cState.getOracleName()) &&
-                        card.hasSameCounters(c) &&
-                        card.hasSamePT(c) && //don't stack token with different PT
-                        cardState.getKeywords().equals(cState.getKeywords()) &&
-                        card.isTapped() == c.isTapped() && // don't stack tapped tokens on untapped tokens
-                        card.isSick() == c.isSick() && //don't stack sick tokens on non sick
-                        card.isToken() == c.isToken() && //don't stack tokens on top of non-tokens
-                        sameCombatRole(card, c)) { //an attacker or blocker stands apart, to be picked and read on its own
-                    stackOnto(card, c);
-                    return true;
+        if (cState.isCreature()) {
+            return card.hasSameCounters(c) &&
+                    card.hasSamePT(c) && //don't stack token with different PT
+                    cardState.getKeywords().equals(cState.getKeywords()) &&
+                    card.isTapped() == c.isTapped() && // don't stack tapped tokens on untapped tokens
+                    card.isSick() == c.isSick() && //don't stack sick tokens on non sick
+                    card.isToken() == c.isToken(); //don't stack tokens on top of non-tokens
+        }
+        return card.hasSameCounters(c) &&
+                cardState.getKeywords().equals(cState.getKeywords()) &&
+                cardState.getColors() == cState.getColors() &&
+                card.isSick() == c.isSick() && //don't stack sick tokens on non sick
+                card.isToken() == c.isToken() && //don't stack tokens on top of non-tokens
+                (!card.isToken() || card.isTapped() == c.isTapped()); //a tapped token (a spent Treasure) leaves its untapped pile
+    }
+
+    // what each card on this field was doing when the field was last grouped
+    private final Map<CardView, Role> roles = new HashMap<>();
+    private final AtomicBoolean regroupPending = new AtomicBoolean();
+
+    /**
+     * What a card is doing that a pile has to share: picked in the waiting prompt (an attacker, a target, a card to
+     * sacrifice), attacking which defender, blocking which attackers. A token you pick out of a pile of tokens, or send
+     * at another defender than the rest, stands apart so you can see which ones you chose.
+     */
+    record Role(boolean picked, boolean attacking, GameEntityView defender, Set<Integer> blocked) {
+        private static final Role IDLE = new Role(false, false, null, Set.of());
+        private static final Role PICKED = new Role(true, false, null, Set.of());
+
+        static Role of(CardView card) {
+            final boolean picked = MatchController.instance.isHighlighted(card);
+            final boolean attacking = card.isAttacking(), blocking = card.isBlocking();
+            if (!attacking && !blocking) {
+                return picked ? PICKED : IDLE;
+            }
+            final GameView game = MatchController.instance.getGameView();
+            final CombatView combat = game == null ? null : game.getCombat();
+            GameEntityView defender = null;
+            Set<Integer> blocked = Set.of();
+            if (combat != null) {
+                if (attacking) {
+                    defender = combat.getDefender(card);
                 }
-            } else {
-                if (!c.hasCardAttachments() &&
-                        cardName.equals(cState.getOracleName()) &&
-                        card.hasSameCounters(c) &&
-                        cardState.getKeywords().equals(cState.getKeywords()) &&
-                        cardState.getColors() == cState.getColors() &&
-                        card.isSick() == c.isSick() && //don't stack sick tokens on non sick
-                        card.isToken() == c.isToken() && //don't stack tokens on top of non-tokens
-                        (!card.isToken() || card.isTapped() == c.isTapped())) { //a tapped token (a spent Treasure) leaves its untapped pile
-                    stackOnto(card, c);
-                    return true;
+                if (blocking) {
+                    blocked = new HashSet<>();
+                    for (final CardView attacker : combat.getAttackers()) {
+                        final FCollection<CardView> blockers = combat.getBlockers(attacker);
+                        if (blockers != null && blockers.contains(card)) {
+                            blocked.add(attacker.getId());
+                        }
+                    }
                 }
             }
+            return new Role(picked, attacking, defender, blocked);
         }
-        return false;
     }
 
     /**
-     * Whether two creatures take the same part in combat: both out of it, or attacking the same defender, or blocking
-     * the same attackers. A token that attacks or blocks must not hide in a pile of the ones that stay home.
+     * A card on this field was updated on its own (picked or let go in a prompt, declared as an attacker, assigned as a
+     * blocker): if that changed what it is doing, its pile splits or it joins its pile again. Cards updated together
+     * regroup the field once.
      */
-    private static boolean sameCombatRole(final CardView a, final CardView b) {
-        final boolean attacking = a.isAttacking(), blocking = a.isBlocking();
-        if (attacking != b.isAttacking() || blocking != b.isBlocking()) {
-            return false;
+    public void followRole(CardView card) {
+        final CardAreaPanel panel = CardAreaPanel.peek(card);
+        if (panel == null || panel.getGroupRole() == null || panel.getGroupRole().equals(Role.of(card))) {
+            return; //not laid out on this field yet (its zone update places it), or nothing changed
         }
-        if (!attacking && !blocking) {
-            return true;
-        }
-        final GameView game = MatchController.instance.getGameView();
-        final CombatView combat = game == null ? null : game.getCombat();
-        if (combat == null) {
-            return true;
-        }
-        if (attacking && combat.getDefender(a) != combat.getDefender(b)) {
-            return false;
-        }
-        if (blocking) {
-            for (final CardView attacker : combat.getAttackers()) {
-                final FCollection<CardView> blockers = combat.getBlockers(attacker);
-                if (blockers != null && blockers.contains(a) != blockers.contains(b)) {
-                    return false;
+        if (regroupPending.compareAndSet(false, true)) {
+            FThreads.invokeInEdtLater(() -> {
+                if (regroupPending.get()) {
+                    updateRoutine.run();
                 }
-            }
+            });
         }
-        return true;
     }
 
     private static void stackOnto(CardView card, CardView topOfStack) {

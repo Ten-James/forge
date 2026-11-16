@@ -1698,6 +1698,10 @@ public class MatchScreen extends FScreen {
         final ZoneType zone = card.getZone();
         if (zone == ZoneType.Battlefield) {
             pnl.updateCard(card);
+            final VPlayerPanel field = getPlayerPanel(card.getController());
+            if (field != null) { //picked, declared as an attacker or blocker: its pile of tokens splits or joins up again
+                field.getField().followRole(card);
+            }
         } else { //ensure card not on battlefield is reset such that it no longer thinks it's on the battlefield
             pnl.setTapped(false);
             pnl.getAttachedPanels().clear();
